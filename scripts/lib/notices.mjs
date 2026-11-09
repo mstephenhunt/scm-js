@@ -13,7 +13,7 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
-const LICENSE_NAMES = ["LICENSE", "LICENSE.txt", "LICENSE.md", "LICENCE", "LICENCE.txt", "license", "license.txt", "license.md"];
+const LICENSE_NAMES = ["LICENSE", "LICENSE.txt", "LICENSE.md", "LICENCE", "LICENCE.txt", "License.txt", "license", "license.txt", "license.md"];
 
 function licenseFileIn(dir) {
   for (const name of LICENSE_NAMES) {
@@ -44,6 +44,59 @@ export function vendoredPlugins(root) {
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 
+/**
+ * Each package's heading and license text, from `node_modules/<name>`. Throws on a package
+ * with no license file. `note` adds a word to a package's heading.
+ */
+export function packageNotices(root, names, note = () => "") {
+  const parts = [];
+  for (const name of names) {
+    const dir = join(root, "node_modules", name);
+    const file = licenseFileIn(dir);
+    if (!file) throw new Error(`notices: ${name} has no license file in node_modules/${name}`);
+    const version = JSON.parse(readFileSync(join(dir, "package.json"), "utf8")).version;
+    parts.push(rule(`${name} ${version}${note(name)}`), readFileSync(file, "utf8").trim(), "");
+  }
+  return parts;
+}
+
+/**
+ * The `scmjs` command's notices (scripts/build-cli.mjs): the packages whose code the bundle
+ * holds, found from its modules rather than from a list, so a new import cannot slip in
+ * without its license.
+ */
+export function cliNotices(root, names, version) {
+  return [
+    `Third-party notices for scmjs ${version}\n`,
+    "scmjs is MIT-licensed (LICENSE). It is built into one file from scmJS's own code and the",
+    "packages below, whose license texts this file carries. Who wrote what, and where the",
+    "adapted algorithms and reference tables come from, is in ATTRIBUTION.md:",
+    "https://github.com/scm-js/scm-js/blob/main/ATTRIBUTION.md",
+    "",
+    "No StarCraft game data is included.",
+    "",
+    ...packageNotices(root, names),
+  ].join("\n");
+}
+
+/**
+ * `@scm-js/core`'s notices (scripts/build-core.mjs): the packages compiled into the library,
+ * found from the bundle's modules as the command's are. mopaq is a dependency rather than
+ * compiled in, so the list is usually empty and no file is written.
+ */
+export function coreNotices(root, names, version) {
+  return [
+    `Third-party notices for @scm-js/core ${version}\n`,
+    "@scm-js/core is MIT-licensed (LICENSE). It is built from scmJS's own code and the packages",
+    "below, whose license texts this file carries. Who wrote what is in ATTRIBUTION.md:",
+    "https://github.com/scm-js/scm-js/blob/main/ATTRIBUTION.md",
+    "",
+    "No StarCraft game data is included.",
+    "",
+    ...packageNotices(root, names),
+  ].join("\n");
+}
+
 /** The whole notices file as text. Throws when a dependency ships no license file. */
 export function buildNotices(root) {
   const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
@@ -59,14 +112,7 @@ export function buildNotices(root) {
     "",
   ];
 
-  for (const name of bundledDependencies(root)) {
-    const dir = join(root, "node_modules", name);
-    const file = licenseFileIn(dir);
-    if (!file) throw new Error(`notices: ${name} has no license file in node_modules/${name}`);
-    const version = JSON.parse(readFileSync(join(dir, "package.json"), "utf8")).version;
-    const note = name === "electron-updater" ? " (desktop app only)" : "";
-    parts.push(rule(`${name} ${version}${note}`), readFileSync(file, "utf8").trim(), "");
-  }
+  parts.push(...packageNotices(root, bundledDependencies(root), (name) => (name === "electron-updater" ? " (desktop app only)" : "")));
 
   for (const plugin of vendoredPlugins(root)) {
     const file = licenseFileIn(plugin.dir);

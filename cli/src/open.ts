@@ -1,0 +1,182 @@
+/**
+ * `scmjs map open` / `scmjs replay open`: the file in the scmJS desktop app when it is installed, else in the editor
+ * in the browser, handed over by a page this command serves on the loopback address for a moment (the editor takes
+ * files only from a loopback page that opened it: src/hooks/useOpenerHandoff.ts).
+ */
+import { spawn, execFileSync } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
+import { createServer } from "node:http";
+import { homedir } from "node:os";
+import { join, resolve } from "node:path";
+import { randomBytes } from "node:crypto";
+import type { Input } from "./files";
+import { qrFor } from "./qr";
+import { t } from "./i18n";
+import { CliError, mark, pc, print } from "./ui";
+
+export const EDITOR_URL = "https://scmjs.dev/editor/";
+/** The play page, which takes the same hand-over and can open a lobby on the map it is handed. */
+export const PLAY_PAGE_URL = "https://scmjs.dev/play/";
+
+/** WSL: a Linux shell on Windows, where the app is the Windows one. */
+const wsl = process.platform === "linux" && (() => { try { return /microsoft/i.test(readFileSync("/proc/version", "utf8")); } catch { return false; } })();
+
+function windowsEnv(name: string): string | null {
+  try { const v = execFileSync("cmd.exe", ["/c", `echo %${name}%`], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim(); return v && !v.includes("%") ? v : null; } catch { return null; }
+}
+const fromWindows = (p: string) => { try { return execFileSync("wslpath", ["-u", p], { encoding: "utf8" }).trim(); } catch { return null; } };
+const toWindows = (p: string) => { try { return execFileSync("wslpath", ["-w", p], { encoding: "utf8" }).trim(); } catch { return p; } };
+
+/** The installed desktop app, or null: `SCMJS_APP`, then where its installers put it. */
+export function findDesktopApp(): string | null {
+  if (process.env.SCMJS_APP) return existsSync(process.env.SCMJS_APP) ? process.env.SCMJS_APP : null;
+  const candidates: string[] = [];
+  if (process.platform === "win32") {
+    for (const base of [process.env.LOCALAPPDATA && join(process.env.LOCALAPPDATA, "Programs"), process.env.ProgramFiles, process.env["ProgramFiles(x86)"]]) if (base) candidates.push(join(base, "scmJS", "scmJS.exe"));
+  } else if (process.platform === "darwin") {
+    candidates.push("/Applications/scmJS.app", join(homedir(), "Applications", "scmJS.app"));
+  } else if (wsl) {
+    const local = windowsEnv("LOCALAPPDATA"), files = windowsEnv("ProgramFiles");
+    for (const base of [local && `${local}\\Programs`, files]) { const p = base && fromWindows(`${base}\\scmJS\\scmJS.exe`); if (p) candidates.push(p); }
+  } else {
+    candidates.push("/opt/scmJS/scm-js", "/opt/scmJS/scmjs", join(homedir(), "Applications", "scmJS.AppImage"));
+  }
+  return candidates.find((p) => existsSync(p)) ?? null;
+}
+
+function detach(command: string, args: string[]): void {
+  const child = spawn(command, args, { detached: true, stdio: "ignore" });
+  child.on("error", () => { /* said by the caller's fallback */ });
+  child.unref();
+}
+
+/** The person's browser at `url` (none with `BROWSER=none`, as other tools take it). */
+export function openBrowser(url: string): void {
+  if (process.env.BROWSER === "none") return;
+  if (process.platform === "win32") detach("cmd.exe", ["/c", "start", "", url]);
+  else if (process.platform === "darwin") detach("open", [url]);
+  else if (wsl) detach("cmd.exe", ["/c", "start", "", url.replace(/&/g, "^&")]);
+  else detach("xdg-open", [url]);
+}
+
+export async function openInScmjs(input: Input, options: { browser?: boolean; editor?: string }): Promise<void> {
+  const app = options.browser ? null : findDesktopApp();
+  if (app) {
+    const file = resolve(input.path);
+    if (process.platform === "darwin") detach("open", ["-a", app, file]);
+    else detach(app, [wsl ? toWindows(file) : file]);
+    print(`${mark.ok} ${t("Opening {name} in the scmJS app", { name: pc.bold(input.name) })}`);
+    return;
+  }
+  if (!options.browser) print(pc.dim(t("No scmJS app is installed here, so the editor opens in your browser.")));
+  await handOver(input, options.editor ?? process.env.SCMJS_EDITOR_URL ?? EDITOR_URL);
+}
+
+/** What the opened page says back, forwarded by the loopback page: `scmjs.invite`, `scmjs.waiting`, `scmjs.error`, `scmjs.taken`. */
+export interface HandoverMessage { type: string; [key: string]: unknown }
+
+/**
+ * The browser: a page on 127.0.0.1 opens the editor (or the play page) and posts it the file once it says it is
+ * ready; this waits for the page to say it was taken (or `timeout`) and stops serving. Every other message the opened
+ * page sends back goes to `onMessage`, which a command uses to print what the page reports (a lobby's link).
+ */
+async function handOver(input: Input, editor: string, { lobby = false, onMessage, onAddress, timeout = 120_000, what = "the editor" }: { lobby?: boolean; onMessage?: (m: HandoverMessage) => void; onAddress?: (page: string) => void; timeout?: number; what?: string } = {}): Promise<boolean> {
+  const token = randomBytes(12).toString("hex");
+  const target = new URL(editor);
+  target.searchParams.set("handoff", "1");
+  let done: (taken: boolean) => void = () => {};
+  const finished = new Promise<boolean>((r) => { done = r; });
+  const server = createServer((req, res) => {
+    const url = new URL(req.url ?? "/", "http://127.0.0.1");
+    if (url.pathname === `/${token}/file`) { res.writeHead(200, { "content-type": "application/octet-stream" }); res.end(input.bytes); return; }
+    if (url.pathname === `/${token}/message` && req.method === "POST") {
+      const chunks: Buffer[] = [];
+      req.on("data", (c: Buffer) => chunks.push(c));
+      req.on("end", () => {
+        res.writeHead(204).end();
+        let m: HandoverMessage | null = null;
+        try { m = JSON.parse(Buffer.concat(chunks).toString("utf8")) as HandoverMessage; } catch { /* not ours */ }
+        if (!m || typeof m.type !== "string") return;
+        if (m.type === "scmjs.taken") done(true);
+        else onMessage?.(m);
+      });
+      return;
+    }
+    if (url.pathname === `/${token}`) { res.writeHead(200, { "content-type": "text/html; charset=utf-8" }); res.end(handoffPage(input.name, target.href, token, lobby, what)); return; }
+    res.writeHead(404).end();
+  });
+  await new Promise<void>((r, j) => { server.once("error", j); server.listen(0, "127.0.0.1", () => r()); });
+  const port = (server.address() as { port: number }).port;
+  const page = `http://127.0.0.1:${port}/${token}`;
+  onAddress?.(page);
+  openBrowser(page);
+  // `what` is English for the loopback page; the terminal says it in the reader's language.
+  const which = what === "the play page" ? "play" : "editor";
+  print(`${mark.info} ${t("Opening {name} in {what, select, play {the play page} other {the editor}} in your browser", { name: pc.bold(input.name), what: which })}`, pc.dim(`  ${t("If nothing opens, go to {page}", { page })}`));
+  const timer = setTimeout(() => done(false), timeout);
+  const taken = await finished;
+  clearTimeout(timer);
+  server.close();
+  if (!taken) throw new CliError(t("{what, select, play {The play page} other {The editor}} did not take the file", { what: which }), t("Open {address} and drop {name} on it.", { address: editor, name: input.name }));
+  print(`${mark.ok} ${t("Handed to {what, select, play {the play page} other {the editor}}", { what: which })}`);
+  return taken;
+}
+
+/** What `map play` found out from the page: the lobby's link, or why there is none yet. */
+export interface LobbyOutcome { link: string | null; invite: string | null; name: string | null; waited: string[]; error: string | null }
+
+/**
+ * `scmjs map play`: the map to the play page with `lobby: true`, so the page opens a lobby on it and reports the
+ * invite link, printed here for the person to send around. The page asks the person to sign in or to give it the
+ * game's files when it must; what it says meanwhile is printed too.
+ */
+export async function playInLobby(input: Input, options: { play?: string; live?: (line: string) => void; onAddress?: (page: string) => void; timeout?: number; qr?: boolean } = {}): Promise<LobbyOutcome> {
+  const out: LobbyOutcome = { link: null, invite: null, name: null, waited: [], error: null };
+  const say = options.live ?? (() => {});
+  await handOver(input, options.play ?? process.env.SCMJS_PLAY_URL ?? PLAY_PAGE_URL, {
+    lobby: true, timeout: options.timeout ?? 300_000, what: "the play page", onAddress: options.onAddress,
+    onMessage: (m) => {
+      if (m.type === "scmjs.invite") { out.link = String(m.link ?? ""); out.invite = String(m.invite ?? ""); out.name = typeof m.name === "string" ? m.name : null; out.error = null; say(`${mark.ok} ${t("{lobby}: send this link to the people you want to play with", { lobby: pc.bold(t("Lobby open")) })}\n  ${pc.cyan(out.link)}`); if (options.qr && out.link) say(["", ...qrFor(out.link), ""].join("\n")); }
+      else if (m.type === "scmjs.waiting") { const text = String(m.message ?? m.reason ?? "waiting"); out.waited.push(text); say(`${mark.info} ${text}${m.reason === "sign-in" ? pc.dim(` ${t("(sign in on the page; the lobby opens after)")}`) : ""}`); }
+      else if (m.type === "scmjs.error") { out.error = String(m.message ?? t("the page could not open a lobby")); say(`${mark.warn} ${out.error}${pc.dim(` ${t("(Invite Players on the page tries again)")}`)}`); }
+    },
+  });
+  return out;
+}
+
+/** The loopback page: opens the editor (a click, where the browser blocks a window it opens by itself) and posts it the file. */
+function handoffPage(name: string, editor: string, token: string, lobby = false, what = "the editor"): string {
+  const esc = (s: string) => s.replace(/[&<>"]/g, (c) => `&#${c.charCodeAt(0)};`);
+  const origin = new URL(editor).origin;
+  return `<!doctype html><meta charset="utf-8"><title>Opening ${esc(name)} in scmJS</title>
+<style>body{font:15px system-ui,sans-serif;background:#14141c;color:#d8d8e8;display:grid;place-items:center;height:90vh;margin:0}
+main{text-align:center}button{font:inherit;padding:.6em 1.4em;border-radius:6px;border:1px solid #4a4a6a;background:#262640;color:#fff;cursor:pointer}
+p{color:#9898b0}</style>
+<main><h2>Opening ${esc(name)}</h2><p id="say">Opening ${esc(what)}…</p><button id="go" hidden>Open in ${esc(what)}</button></main>
+<script>
+const editor = ${JSON.stringify(editor)}, origin = ${JSON.stringify(origin)}, token = ${JSON.stringify(token)}, name = ${JSON.stringify(name)}, lobby = ${lobby ? "true" : "false"};
+const tell = (m) => fetch("/" + token + "/message", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(m) });
+const say = (t) => { document.getElementById("say").textContent = t; };
+let win = null;
+addEventListener("message", async (e) => {
+  if (e.origin !== origin || e.source !== win) return;
+  // (each time it says it is ready: in development the editor listens again after its first try)
+  const type = e.data?.type;
+  if (typeof type !== "string" || !type.startsWith("scmjs.")) return;
+  if (type === "scmjs.ready") {
+    const bytes = new Uint8Array(await (await fetch("/" + token + "/file")).arrayBuffer());
+    win.postMessage(lobby ? { type: "scmjs.open", files: [{ name, bytes }], lobby: true } : { type: "scmjs.open", files: [{ name, bytes }] }, origin, [bytes.buffer]);
+    return;
+  }
+  // Everything else the page says (a lobby's link, what it waits for) goes to the command.
+  const { type: _t, ...rest } = e.data;
+  await tell({ type, ...Object.fromEntries(Object.entries(rest).filter(([, v]) => typeof v === "string")) });
+  if (type === "scmjs.taken") { say("Opened. You can close this tab and go back to the terminal."); setTimeout(() => close(), 800); }
+  else if (type === "scmjs.invite") say("The lobby is open; the link is in the terminal.");
+  else if (type === "scmjs.waiting" || type === "scmjs.error") say(e.data.message || type);
+});
+function go() { win = open(editor, "_blank"); if (win) { document.getElementById("go").hidden = true; say("Waiting for " + ${JSON.stringify(what)} + "…"); } return !!win; }
+if (!go()) { say("Your browser asks before opening " + ${JSON.stringify(what)} + "."); document.getElementById("go").hidden = false; }
+document.getElementById("go").onclick = go;
+</script>`;
+}

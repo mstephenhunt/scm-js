@@ -172,7 +172,7 @@ dialogs — `tx.players` / `tx.forces` (OWNR+IOWN, SIDE, COLR, CRGB, FORC), `tx.
 `editor/settings.ts` (`playerSlotViews` / `patchPlayer`, `unitTypeView` / `patchUnitType`, …: effective numbers with
 the dat defaults filled in, hit points in whole points, a patch answers with the sections it changed so `runUpdate`'s
 `tracked` can report them even on a fresh map where everything is already dirty), and `api.settings` reads the same
-views without a transaction; `document.resize` is `resizeDocumentAtom` (history dropped). Around them: `api.triggers`
+views without a transaction; `document.resize` is `resizeDocumentAtom` (one `whole` undo step; history dropped on a shared map). Around them: `api.triggers`
 (read TRIG/MBRF plus `triggerDefs.ts`, the text printer/parser and the `newTrigger` /
 `isPreserved` helpers — everything a trigger editor needs that is not a write), `api.query`
 (hit-testing through the layers' own functions, `validateScenario`, `mapStatistics`,
@@ -537,3 +537,49 @@ binds them only while a replay's tab is in front; a reorder of `useHotkeys` that
 built-in keys first would break it. A focused `<select>` counts as typing, so a plugin that
 wants its keys back after a menu choice blurs the menu.
 
+### The host without the editor (`src/plugins/headless.ts`, 2026-11-06)
+
+`scmjs map run` (`cli.md`) is `createPluginApi` over a fresh Jotai store under Node — what `tests/plugins.test.ts`
+had been doing all along, which is why no spike was needed. `headlessStore(doc)` is `loadDocumentAtom` on an
+`OpenedMap`; `documentOf` reads it back (`scenarioAtom`, `archiveExtrasAtom`, `archiveStoredAtom`, `builtByAtom`);
+`modified()` is `mapModifiedAtom`. `attachSinks` subscribes to `statusMessageAtom`, `toastsAtom` and `subscribeLog`
+so the surfaces that would draw are reported; dialogs/panels/map views register into their atoms and nothing reads
+them (`addMapView` already guards `document.createElement`; `pickFiles` answers `[]`). Code loads through the
+editor's own `loader.ts` with deps the caller brings: the CLI's `nodeLoaderDeps` (`cli/src/run.ts`) reads `file:`
+from disk, else `fetch`es; TypeScript via `transpileTs` with the TypeScript it found (`loadTypeScript`); modules
+written to a temp folder as `.mjs` and `import()`ed. **Nothing Node's in this file**: it is in `tsconfig.app.json`
+(no Node types) — the first cut had `node:fs` here and `tsc -b` refused it. `loadPlugin` now takes a parsed `PluginSource` as well as a spec, because `parseSpec` has no words for
+a folder on disk (`sourceFor` makes the `file:` source). Commands run through the registered `run` itself, not
+`runCommand`, so a throw reaches the terminal instead of the log. `api.document.save()` is not made to work here:
+the CLI writes the document with `writeBack`. Layering: `tests/core.test.ts` lets `cli/src/run.ts` import this one
+module beyond the library's entry (`HOST_EXCEPTION`); the host stays the editor's.
+
+### Data sets for mods (M4, 2026-11-08)
+
+Additive, version 1 unchanged, nothing named after a mod: `GameDataProfile.url?` (where the set's makers publish it;
+a saved map records it), `GameDataFiles.base?` (lay the files over that data set's copy instead of the game's
+archives), `GameDataSource.kind` gains `"reader"` and the source `hash?` / `base?`, `gameData.attach(profile, read,
+{ hash? })` (a data set that is a function in memory over the one in use: the Mod Editor's edit-and-see loop) and
+`gameData.reload()` (drop everything decoded and draw again). `TestMapFile.dataSet?` `{ id, name, hash }` reaches
+test targets. `api.data`'s tables are as wide as the data set (`UnitsDat.flingy` / weapons are `Uint16Array` now),
+`api.names.units()` lists ids ≥ 233 after the classes, `api.names.unitGroups()` appends the data set's groups
+(`"<set> · Terran Units"`), and `api.graphics.icon("unit", id)` pictures types past 227 from `uniticons.grp` where the
+set has one. See `gamedata.md` "Data sets widened".
+
+**The Mod Editor's asks (2026-11-08, branch `mods-api`)**, all additive: `GameDataReader` takes a second argument
+`GameDataReadContext { member, under(path) }`; `GameDataReadOptions { under? }` on `gameData.read`;
+`gameData.storedPath(member)`; `gameData.rehash(hash | null)` (sync, null when no reader source); `GameDataSource.base`
+also for a reader. `PickFilesOptions.directory` + overloads (`{ directory: true }` → `FolderFile[]`, a third catch-all
+overload so a caller holding a plain `PickFilesOptions` still compiles; the host's implementation is cast to
+`UiApi["pickFiles"]`): `host.ts#pickFolder` = `showDirectoryPicker({ mode: "read", id: "plugin-folder" })` walked
+(`folders.ts#directoryHandleFiles`), AbortError → `[]`, any other error → logged, then `<input webkitdirectory>`
+(`folderInputFiles`). Paths from the folder's parent, folder name first, sorted. `FileTypeSpec.openFolder` /
+`acceptsFolder`: a type with `openFolder` registers even with no extensions (left out of `pickerFileTypes`);
+`fileTypes.ts#takeDroppedFolders` runs inside the drop (App's `openDropped`), takes the items whose
+`webkitGetAsEntry()` is a directory (indexes among the drop's *file* items = `DataTransfer.files` indexes), walks each
+(`entryFiles`: `readEntries` until empty — Chromium hands 100 at a time) and offers it to the first type (registration
+order) whose `acceptsFolder` passes; none takes it → a log line, the folder is dropped. With no folder-opening type
+nothing is taken and a folder drop behaves as before. Not done: the Open dialog's own drop zone (it reads one file).
+Proofs: `tests/dataset-reader.test.ts`, `tests/fileTypes.test.ts` ("a folder's files", "a dropped folder").
+Also `graphics.grpImage(bytes, frame, { palette, teamColor, flipped, shadow })` → `Promise<PluginImage | null>`
+(`graphics.ts`; throws on a palette that is no tileset file name; `tests/grp-picture.test.ts`) — see `gamedata.md`.

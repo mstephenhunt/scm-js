@@ -19,17 +19,22 @@
  * `tests/names.test.ts`, so they cannot drift.
  */
 import type { UnitAssets } from "../formats/units/load";
-import { TECH_NAMES, UNIT_NAMES, UPGRADE_NAMES, type LoadedNames } from "./units";
+import { datCount, UnitFlag } from "../formats/dat/dat";
+import { TECH_NAMES, UNIT_GROUPS, UNIT_NAMES, UPGRADE_NAMES, type LoadedNames, type RaceKey, type UnitCatalogue } from "./units";
 import { WEAPON_NAMES } from "./weapons";
+import { nameList, statWithText } from "../formats/mod/data";
 
 /**
  * A `stat_txt.tbl` label as plain text. Button labels carry their hotkey in front of the
  * text and colour codes around the letter it names (`i<03><03>I<01>rradiate`): the first
- * character goes when a control byte follows it, and every control byte goes.
+ * character goes when a control byte follows it, and every control byte goes. A button's
+ * tooltip runs on into its description after a line break; the name is the first line.
  */
 export function cleanLabel(label: string): string {
   let text = label;
-  if (text.length > 1 && text.charCodeAt(1) < 0x20) text = text.slice(1);
+  if (text.length > 1 && text.charCodeAt(1) < 0x20 && text[1] !== "\n") text = text.slice(1);
+  const lineBreak = text.search(/[\r\n]/);
+  if (lineBreak > 0) text = text.slice(0, lineBreak);
   // eslint-disable-next-line no-control-regex
   return text.replace(/[\x00-\x1f]/g, "").trim();
 }
@@ -201,13 +206,18 @@ function pick(data: string, game: string): string | null {
   return data !== "" && data !== game ? data : null;
 }
 
-/** A label column resolved through the table: `stat_txt` is 1-based in the dat files, 0 meaning none. */
-function labelled(labels: ArrayLike<number> | undefined, statTxt: readonly (readonly string[])[], count: number, game: (id: number) => string): (string | null)[] {
+/**
+ * A label column resolved through the table (`stat_txt` is 1-based in the dat files, 0 meaning
+ * none), with the mod's own list (`nameList`: a name an entry, "" where the label stands) over
+ * it; as many entries as the table has, the editor's own count at least.
+ */
+function labelled(labels: ArrayLike<number> | undefined, statTxt: readonly (readonly string[])[], count: number, game: (id: number) => string, list: readonly string[] | null): (string | null)[] {
   const out: (string | null)[] = [];
-  for (let id = 0; id < count; id++) {
+  for (let id = 0; id < Math.max(count, labels?.length ?? 0); id++) {
     const index = labels?.[id] ?? 0;
-    const text = index > 0 ? cleanLabel(statTxt[index - 1]?.[0] ?? "") : "";
-    out.push(pick(text, game(id)));
+    const own = list?.[id] ? cleanLabel(list[id]) : "";
+    const text = own || (index > 0 ? cleanLabel(statTxt[index - 1]?.[0] ?? "") : "");
+    out.push(id < count ? pick(text, game(id)) : text || null);
   }
   return out;
 }
@@ -215,25 +225,112 @@ function labelled(labels: ArrayLike<number> | undefined, statTxt: readonly (read
 /**
  * The names a loaded data set puts in front of the editor's tables, or null when it has
  * no `stat_txt.tbl` (an older extraction) — every slot null means the tables stand alone,
- * which is what Blizzard's own files come to.
+ * which is what Blizzard's own files come to. A GPTP mod's own name files, where the set
+ * has them (`assets.nameTexts`), go first for weapons, upgrades and technologies, as the
+ * command line's `mod header` reads them (`formats/mod/data.ts`): `arr\<table>.txt` over
+ * the labels, `rez\stat.txt` where `stat_txt.tbl` has no entry.
  */
-export function namesFromAssets(assets: Pick<UnitAssets, "statTxt" | "weapons" | "upgrades" | "techs">): LoadedNames | null {
-  const statTxt = assets.statTxt;
-  if (!statTxt) return null;
+export function namesFromAssets(assets: Pick<UnitAssets, "statTxt" | "weapons" | "upgrades" | "techs"> & Partial<Pick<UnitAssets, "units" | "unitNames" | "nameTexts">>): LoadedNames | null {
+  const texts = assets.nameTexts ?? {};
+  const statTxt = assets.statTxt && texts.stat !== undefined
+    ? statWithText(assets.statTxt.map((e) => e.join("\0")), texts.stat).map((e) => e.split("\0"))
+    : assets.statTxt;
+  const extended = extendedUnitNames(assets);
+  if (!statTxt) {
+    if (!extended.some((n) => n !== null)) return null;
+    return { units: extended.map((n, id) => (n && id < UNIT_NAMES.length ? pick(n, gameUnitName(id)) : n)), weapons: [], upgrades: [], techs: [] };
+  }
   const units: (string | null)[] = [];
   for (let id = 0; id < UNIT_NAMES.length; id++) {
+    // A data set's unitnames.tbl names every type where it has an entry, as GPTP reads it; stat_txt.tbl otherwise.
+    const own = extended[id];
     const entry = statTxt[id];
-    units.push(entry ? pick(composeUnitName(entry), gameUnitName(id)) : null);
+    units.push(own ? pick(own, gameUnitName(id)) : entry ? pick(composeUnitName(entry), gameUnitName(id)) : null);
   }
+  for (let id = UNIT_NAMES.length; id < extended.length; id++) units.push(extended[id]);
+  const list = (key: "weapons" | "upgrades" | "techdata", labels: ArrayLike<number> | undefined) => nameList(texts[key] ?? null, labels?.length ?? 0);
   return {
     units,
-    weapons: labelled(assets.weapons?.label, statTxt, WEAPON_NAMES.length, gameWeaponName),
-    upgrades: labelled(assets.upgrades?.label, statTxt, UPGRADE_NAMES.length, gameUpgradeName),
-    techs: labelled(assets.techs?.label, statTxt, TECH_NAMES.length, gameTechName),
+    weapons: labelled(assets.weapons?.label, statTxt, WEAPON_NAMES.length, gameWeaponName, list("weapons", assets.weapons?.label)),
+    upgrades: labelled(assets.upgrades?.label, statTxt, UPGRADE_NAMES.length, gameUpgradeName, list("upgrades", assets.upgrades?.label)),
+    techs: labelled(assets.techs?.label, statTxt, TECH_NAMES.length, gameTechName, list("techdata", assets.techs?.label)),
   };
 }
 
 /** True when every slot is null: the data set names things exactly as the game's own does. */
 export function namesAreTheGames(names: LoadedNames | null): boolean {
   return !names || [names.units, names.weapons, names.upgrades, names.techs].every((list) => list.every((n) => n === null));
+}
+
+/**
+ * The names `rez\unitnames.tbl` gives the unit types, by id (null where it names none, or
+ * the data set has no such table): entry N is type N, GPTP's convention, for every type —
+ * the game's 228 included, which GPTP also names from it when it is there. `*` is no name.
+ * As long as units.dat has types, so a data set with more than 228 has names for the rest.
+ */
+function extendedUnitNames(assets: Partial<Pick<UnitAssets, "units" | "unitNames">>): (string | null)[] {
+  const count = Math.max(datCount(assets.units?.flingy), UNIT_NAMES.length);
+  const out: (string | null)[] = [];
+  for (let id = 0; id < count; id++) {
+    const entry = assets.unitNames?.[id];
+    const name = entry ? composeUnitName(entry) : "";
+    out.push(name && name !== "*" ? name : null);
+  }
+  return out;
+}
+
+/** A unit type's race by its units.dat group flags (bit 0 Zerg, 1 Terran, 2 Protoss), neutral for none. */
+export function raceOfFlags(groupFlags: number): RaceKey {
+  return groupFlags & 1 ? "zerg" : groupFlags & 2 ? "terran" : groupFlags & 4 ? "protoss" : "neutral";
+}
+
+/** Which kind of type each of StarEdit's groups holds, by id: its race, and buildings, heroes or other units; null race for the neutral groups, which take anything neutral. */
+const STAREDIT_GROUP_OF: ReadonlyMap<number, { race: RaceKey | null; kind: "units" | "buildings" | "heroes" | null }> = new Map(
+  UNIT_GROUPS.flatMap((g) => {
+    const race = g.race === "neutral" ? null : g.race;
+    const kind = race === null ? null : g.label.endsWith("Buildings") ? "buildings" : g.label.endsWith("Heroes") ? "heroes" : "units";
+    return g.units.map((id) => [id, { race, kind }] as const);
+  }),
+);
+
+/** Whether a type with this race and these flags still belongs in StarEdit's group for its id. */
+function fitsStarEditGroup(id: number, race: RaceKey, flags: number): boolean {
+  const group = STAREDIT_GROUP_OF.get(id);
+  if (!group) return false;
+  if (group.race === null) return race === "neutral";
+  if (group.race !== race) return false;
+  const building = (flags & UnitFlag.Building) !== 0, hero = (flags & UnitFlag.Hero) !== 0;
+  return group.kind === "buildings" ? building : group.kind === "heroes" ? hero && !building : !hero && !building;
+}
+
+/**
+ * What the loaded data has beyond StarEdit's palette (`units.ts#UnitCatalogue`): its count,
+ * and the types the palette lists by the data's own race and building flags — every one from
+ * 228 on when the data set names none of them, else the ones it names (a mod's table is
+ * usually wider than what it uses, the rest left as copies of a template with no name) —
+ * and, before them, the game's types the data set renamed into something StarEdit's group
+ * for that id no longer describes (a mod's Zerg unit in the slot of a Terran building).
+ * `names` is what `namesFromAssets` gave: a type it leaves to the tables is the game's own
+ * and stays where StarEdit put it, so the game's data moves nothing.
+ */
+export function unitCatalogue(assets: Pick<UnitAssets, "units"> & Partial<Pick<UnitAssets, "unitNames">>, names: LoadedNames | null = null): UnitCatalogue | null {
+  const units = assets.units;
+  const count = datCount(units.flingy);
+  const extended: { id: number; race: RaceKey; building: boolean }[] = [];
+  const entry = (id: number) => ({ id, race: raceOfFlags(units.groupFlags[id] ?? 0), building: ((units.flags[id] ?? 0) & UnitFlag.Building) !== 0 });
+  for (let id = 0; id < Math.min(count, UNIT_NAMES.length); id++) {
+    if (names?.units[id] == null) continue;
+    const e = entry(id);
+    if (!fitsStarEditGroup(id, e.race, units.flags[id] ?? 0)) extended.push(e);
+  }
+  for (let id = UNIT_NAMES.length; id < count; id++) {
+    if (assets.unitNames) {
+      const entry = assets.unitNames[id];
+      const name = entry ? composeUnitName(entry) : "";
+      if (!name || name === "*") continue;
+    }
+    extended.push(entry(id));
+  }
+  if (count <= UNIT_NAMES.length && extended.length === 0) return null;
+  return { count: Math.max(count, UNIT_NAMES.length), extended };
 }

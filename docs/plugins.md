@@ -399,7 +399,17 @@ can keep working there until the plugin is ready for its own folder.
 
 ### Step 5: load it from your machine
 
-Serve the folder, with cross-origin requests allowed so the editor can fetch from it:
+With the [scmjs command](cli.md#writing-a-plugin), in the plugin's folder:
+
+```sh
+npx @scm-js/cli plugin dev
+```
+
+It serves the folder, opens the editor with the plugin, and reloads it each time you save
+a file. The first time, the editor asks you to add it.
+
+Without it, serve the folder, with cross-origin requests allowed so the editor can fetch
+from it:
 
 ```sh
 npx serve --cors .
@@ -444,10 +454,14 @@ piece in turn.
 
 ### Trying the API first
 
-The [API Playground](https://github.com/scm-js/plugin-api-playground) plugin lets you call
-the API before setting anything up. Install it from Plugins ▸ Browse Plugins… and open
-Tools ▸ API Playground. Its panel has a code editor where `api` is already defined. Write
-a few lines, press Ctrl+Enter, and they run against the open map.
+From a terminal, `scmjs map run script.mjs map.scx` runs a file exporting `activate(api)`
+over a map with the same API and no editor, and writes the map back if it changed; the
+[command line guide](cli.md#running-a-plugin-over-a-map) has the details.
+
+In the editor, the [API Playground](https://github.com/scm-js/plugin-api-playground)
+plugin lets you call the API before setting anything up. Install it from Plugins ▸ Browse
+Plugins… and open Tools ▸ API Playground. Its panel has a code editor where `api` is
+already defined. Write a few lines, press Ctrl+Enter, and they run against the open map.
 
 - **Stop** removes everything the run added: menu items, listeners, panels, overlays, map
   tools and timers. Running again stops the previous run first.
@@ -472,16 +486,18 @@ panel, makes the same kind of link for your own snippet.
 Examples without a link are fragments: they need something only your plugin has, such as a
 server to talk to or a variable defined elsewhere.
 
-> **Note.** A snippet runs as the playground, so a command or service id without a dot is
-> prefixed with the playground's id and can replace the playground's own. Use a dotted id of
-> your own (`"my-plugin.open"`) while you try things.
+> **Note.** A snippet runs as part of the playground plugin, so a command or service id
+> without a dot is prefixed with the playground's id and can replace the playground's own.
+> Use a dotted id of your own (`"my-plugin.open"`) while you try things.
 
 ### Starting a plugin
 
-Start from [Hello World](https://github.com/scm-js/plugin-hello-world), or from a snippet
-exported from the playground. Hello World's `plugin.ts` is about ninety lines, mostly
-comments. The repository also has a Korean catalogue (`ko.ts`) with the test that keeps it
-complete, and the typings, type-check, build and CI described below.
+`npx @scm-js/cli plugin new "My Plugin"` writes a plugin to start from in a new folder,
+set up as the project's own plugins are (see [the command line](cli.md#writing-a-plugin)).
+Or start from [Hello World](https://github.com/scm-js/plugin-hello-world), or from a
+snippet exported from the playground. Hello World's `plugin.ts` is about ninety lines,
+mostly comments. The repository also has a Korean catalogue (`ko.ts`) with the test that
+keeps it complete, and the typings, type-check, build and CI described below.
 
 ### The two files
 
@@ -545,7 +561,10 @@ example.
 
 ### Loading it from your machine
 
-Serve the plugin's folder with cross-origin requests allowed:
+`npx @scm-js/cli plugin dev` in the plugin's folder serves it, opens the editor with it,
+and reloads it each time you save. It runs `npm run build` first, and again on each
+change, when `plugin.json` names a `build`. Or serve the folder yourself, with
+cross-origin requests allowed:
 
 ```sh
 npx serve --cors .
@@ -669,9 +688,14 @@ keeps `ko.ts` complete.
 
 ### Testing
 
-The project's plugins keep their logic in files that take plain data and never touch
-`api`, and test those files alone. `plugin.ts` is then a thin layer that reads from the
-API, calls the logic and writes the result back. Paint's geometry, Terrain from Image's
+`scmjs map run <folder> map.scx` runs the plugin as it is on your disk over a map, with
+the editor's API and nothing to click: `--command <id>` runs one of its commands,
+`--dry-run` says what it would change. It is a quick check, and a way to run a plugin over
+a folder of maps from a shell loop; the [command line
+guide](cli.md#running-a-plugin-over-a-map) has it. For tests that run on every change, the
+project's plugins keep their logic in files that take plain data and never touch `api`,
+and test those files alone. `plugin.ts` is then a thin layer that reads from the API,
+calls the logic and writes the result back. Paint's geometry, Terrain from Image's
 conversion and Stamp Library's storage format are all tested this way.
 
 For Base Check that means moving the counting into a file of its own:
@@ -811,8 +835,8 @@ You call `fetch` yourself. Two things only show up in the desktop app:
 - **The desktop app's origin is `app://scmjs`.** The web editor's origin is
   `https://scmjs.dev`, for the stable editor and the nightly alike. Your server's CORS
   settings need to allow both, or desktop requests fail as if the server were down.
-- **Open a sign-in popup blank, then point it.** A link opens in the user's real browser,
-  which cannot post a session back. Open an empty named window
+- **Open a blank sign-in popup, then set its address.** A link opens in the user's real
+  browser, which cannot post a session back. Open an empty named window
   (`window.open("", "my-plugin-signin", "width=540,height=720")`) and set its
   `location.href` once your server says where to go.
 
@@ -1571,7 +1595,9 @@ and Walkability is the plugin to read.
 - **`pickObject`** resolves with the unit or location clicked, outlining what is under the
   pointer as it moves.
 - **`pickFiles`** opens the browser's file picker and resolves with the files, or an empty
-  list.
+  list. With `{ directory: true }` it asks for a folder instead and resolves with every
+  file in it as `{ path, file }`, where `path` runs from the folder's name with forward
+  slashes (`My Mod/arr/units.dat`).
 
 The map picks resolve `null` on Esc or a right-click. Only one runs at a time, and a new
 one cancels the previous.
@@ -1590,6 +1616,23 @@ api.ui.fileType({
   name: "StarCraft replay",
   extensions: [".rep"],
   open: (files) => api.log(`${files.length} replays: ${files.map((f) => f.name).join(", ")}`),
+});
+```
+
+A file type can also open folders. Give it `openFolder`, and a folder dropped on the
+editor comes to you as its files with their paths, in the same `{ path, file }` form as a
+folder pick. `acceptsFolder` looks at the paths first and says whether the folder is
+yours. When several plugins open folders, the first to register whose `acceptsFolder`
+agrees gets the folder, and a folder nobody takes is left alone. A type that only opens
+folders can have an empty `extensions`.
+
+```ts
+// A mod's folder dropped on the editor: one with the game's tables in it.
+api.ui.fileType({
+  name: "StarCraft mod",
+  extensions: [],
+  acceptsFolder: (paths) => paths.some((p) => /(^|\/)arr\/units\.dat(ex)?$/i.test(p)),
+  openFolder: (files) => api.log(`${files.length} files, the first ${files[0]?.path}`),
 });
 ```
 
@@ -1818,8 +1861,8 @@ The open map as a whole.
   when `launch` is true (the user's preference when left out). In a browser the file goes
   into the test folder the user picked; with none picked it answers null and never
   downloads.
-- **Whole-map changes:** `resize` and `changeTileset`. Both clear the undo history, as the
-  editor's own dialogs do.
+- **Whole-map changes:** `resize` and `changeTileset`. Each is one undo step, as the
+  editor's own dialogs are; on a shared map they clear everyone's undo history instead.
 - **Several open maps:** `id()`, `list()` and `activate(id)`; see [Several
   maps](#several-maps-and-maps-to-look-at-only).
 - **Files inside the archive:** `extras` lists, reads and writes files stored next to the
@@ -2209,17 +2252,38 @@ Help ▸ Game Data…. The `"gameData"` event fires on every change.
   set they belong to, and `profiles()` lists every set with a copy here.
 - **Managing sets.** `install(profile, files, progress)` extracts a set from its archives
   and switches to it, `select(id)` switches, and `remove(id)` deletes a set's copy. The
-  game's own archives must be among a mod's files, since a mod only replaces files.
+  game's own archives must be among a mod's files, since a mod only replaces files, unless
+  `files.base` names a set whose copy the files are laid over instead. `profile.url` says
+  where the set's makers publish it; a map saved with the set records it.
+- **A set in memory.** `attach(profile, read, { hash })` draws from a function: every file
+  is asked of `read` first, and what it answers null for comes from the set in use.
+  Nothing is stored. After changing what `read` answers, `reload()` drops everything
+  decoded and draws the map again — the loop for a plugin that edits the tables or
+  pictures. `read` gets a second argument: `member`, the game's own name for the file
+  (`arr\units.dat`, or `rez\stat_txt.tbl` for `tileset/stat_txt.tbl`), and `under(path)`,
+  which reads the set the function was attached over, such as the game's file beneath a
+  mod's. `read` need not answer `unit/manifest.json`: the editor works out from what
+  `read` answers which tables are in GPTP's `.datex` layout and whether the set brings
+  unit names and command card pictures.
+- **The hash.** `hash` is what a map saved with the set records and what Test Map hands
+  on: [the mod's hash](mods.md#the-mods-hash), over every file of the set, its plugins and
+  its FireGraft project, never compared with the game's (`@scm-js/core`'s `modHash` works
+  it out). When it is worked out after the files are attached or redrawn, `rehash(hash)`
+  gives it to the set in use without reading anything again.
 - **Reading files.** `read(path)` hands over one of the extracted files as bytes, for a
   plugin that reads the game's formats itself: `arr/units.dat`, `tileset/jungle.cv5`,
   `unit/zerg/drone.grp`. Paths are the archive's, in lower case with forward slashes, and
   `tileset/manifest.json` and `unit/manifest.json` list what was extracted. It answers
-  null for a file the copy does not have.
+  null for a file the copy does not have. `read(path, { under: true })` reads the set
+  under a set in memory, without asking its function. `storedPath(member)` turns the
+  game's name for a file into the path these take.
 
 A mod's files replace the game's in the same formats, so `data`, `tileset`, `graphics` and
-`names` follow them automatically. Mods that extend the game's table sizes are not
-covered. A plugin written only for the game's own data can check `profile().id`
-(`"starcraft"`) and turn itself off for anything else.
+`names` follow them automatically, at whatever width the mod's tables have: `data.units()`
+can hold more than 228 types, `names.unitGroups()` then ends with the set's own groups,
+and `graphics.icon` pictures the new types where the set has a sheet for them. A plugin
+written only for the game's own data can check `profile().id` (`"starcraft"`) and turn
+itself off for anything else.
 
 ```ts
 const source = api.gameData.source();
@@ -2228,6 +2292,15 @@ for (const set of await api.gameData.profiles()) api.log(`data set ${set.id}: ${
 
 const dat = await api.gameData.read("arr/units.dat");
 api.log(dat ? `units.dat is ${dat.length} bytes` : "no game data installed");
+```
+
+```ts
+// A table editor's loop: draw from the edited tables, and name them once their digest is known.
+const edited = new Map<string, Uint8Array>(); // by the game's names, as a mod keeps them
+await api.gameData.attach({ id: "draft", name: "Draft" }, (path, file) => (file.member && edited.get(file.member)) ?? null);
+// … after an edit:
+api.gameData.reload();
+api.gameData.rehash(await hashOfMod(edited)); // the mod's hash over every file of the set (core's modHash)
 ```
 
 ### `api.consts`
@@ -2265,6 +2338,22 @@ The images the map view draws, for your own lists and previews.
   or a technology, as its command card shows it: yellow, or grey or white with
   `{ look: "disabled" }` or `{ look: "selected" }`. It suits a list or a tooltip better
   than a unit's picture from the map.
+- **Your own GRPs:** `grpImage(bytes, frame, { palette, teamColor })` draws one frame of a
+  GRP you hold, such as a mod's picture, the way the editor draws a unit: through a
+  tileset's palette (`"jungle"`; the open map's by default), with the team colour of a
+  player (0 by default, `null` for none). `flipped` mirrors it and `shadow` draws it as a
+  shadow. It resolves with a new canvas, or null when the bytes are not a GRP or there is
+  no game data for the palette.
+
+```ts
+// A mod's marine in player 2's colour on Ice, beside the game's own.
+const mine = await api.gameData.read("unit/terran/marine.grp");
+const theirs = await api.gameData.read("unit/terran/marine.grp", { under: true });
+for (const bytes of [mine, theirs]) {
+  const pic = bytes && (await api.graphics.grpImage(bytes, 0, { palette: "ice", teamColor: 1 }));
+  if (pic) api.log(`a ${pic.width} × ${pic.height} picture`);
+}
+```
 
 Rules for using them:
 

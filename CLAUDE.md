@@ -9,8 +9,10 @@ StarEdit / SCMDraft 2. It opens real `.scm`/`.scx` maps (MPQ archives via `mopaq
 the game's own tileset graphics, and writes playable archives back. `docs/guide.md` is the map-maker's
 guide (what each layer does, and what is and is not implemented) — read it first; `README.md` is the
 repository's short front page (what it is, what it does, how to start); the install guide is `docs/installing.md`; the TrigScript guide is `docs/trigscript.md`, with its language guide `docs/trigscript-language.md` and library guide `docs/trigscript-library.md`; the technical companions are `docs/triggers.md` (the trigger reference), `docs/file-formats.md`,
-`docs/chk-format.md` (the section-by-section reference), `docs/game-data.md`, `docs/plugins.md` and
-`docs/development.md`. Keep all twelve current when behaviour changes — the eleven under `docs/` are also the
+`docs/chk-format.md` (the section-by-section reference), `docs/game-data.md`, `docs/plugins.md`,
+`docs/cli.md` (the `scmjs` command line), `docs/mods.md` (mods: the mod folder and `scmjs mod`), `docs/core.md` (the `@scm-js/core` library) and `docs/development.md`.
+Keep all fifteen current when behaviour
+changes — the fourteen under `docs/` are also the
 documentation *site* (`npm run build:docs` → docs.scmjs.dev), which renders them rather
 than holding anything of its own.
 
@@ -36,7 +38,7 @@ reach, and the traps in them are not visible from the code.
 | `src/editor/{resize,validate,find,exchange,statistics,startLocations,sections}.ts`; adding an `atomWithStorage` | `editor-operations.md` |
 | `src/editor/{log,diagnostics}.ts`, `DebugConsole`, `useErrorCapture`, adding a log line anywhere | `logging.md` |
 | `src/i18n/**`, `scripts/i18n.mjs`, `ko.json`, any user-visible string through `t()`, `api.i18n` | `i18n.md` |
-| `src/plugins/{host,api}.ts`, `atoms/pluginAtoms.ts` — the contract, transactions, events, UI surfaces | `plugins-host.md` |
+| `src/plugins/{host,api,headless}.ts`, `atoms/pluginAtoms.ts` — the contract, transactions, events, UI surfaces, the host without the editor | `plugins-host.md` |
 | `src/plugins/{loader,builtin,defaults,registry,updates}.ts`, `vendor-plugins.mjs`, `*-plugin-types.mjs` | `plugins-loading.md` |
 | A specific plugin repository, or which plugin is the worked example for an API | `plugins-catalogue.md` |
 | `src/gamedata/**`, `scripts/extract-*.mjs`, data sets, `data/gameNames.ts` | `gamedata.md` |
@@ -46,12 +48,18 @@ reach, and the traps in them are not visible from the code.
 | `src/components/**`, `MapViewport`, dialogs, hotkeys, drops, the close guard, `services/mapImage.ts` | `viewport-ui.md` |
 | `services/preload.ts`, `usePreload`, the splash, `devReactTracks.ts` | `startup.md` |
 | `e2e/**`, `playwright.config.ts` — the browser tests | `e2e.md` |
+| `cli/**`, `scripts/build-cli.mjs`, `useOpenerHandoff` — the `scmjs` command | `cli.md` |
+| `core/**`, `scripts/build-core.mjs`, `src/editor/mapFile.ts` — the `@scm-js/core` package; adding an export, what may not reach the UI | `core.md` |
+| `src/formats/mod/**`, `cli/src/mod/**`, the `mod_*` MCP tools — the mod folder, `scmjs mod` | `mods.md` |
 
 ## Commands
 
 ```sh
 npm run dev            # Vite dev server, http://localhost:5173
+npm run dev:desktop    # the dev server + Electron against it; closing the window stops both
 npm run build          # tsc -b (type-check) + vite build
+npm run verify         # what CI runs (lint, tests, build, e2e), with a summary for the PR; -- --quick skips build + e2e
+npm run doctor         # what this machine lacks (Node, packages, game data, Chromium) and the command for each
 npm run lint           # oxlint
 npm test               # vitest run (node environment, ~2s)
 npm run test:watch
@@ -65,6 +73,7 @@ npm run check:assets   # what is on disk, no archives touched (predev/prebuild r
 npm run i18n           # the language catalogues against the source (-- --write brings them up to date)
 npm run docs:reference # the generated tables of docs/triggers.md and docs/chk-format.md, from the code
 npm run build:image    # web bundle + docker/Dockerfile -> the `scmjs` image (nginx, no game data)
+npm run cli -- map info a.scx   # the `scmjs` command line, built (cli/dist/scmjs.mjs) and run; docs/cli.md
 node scripts/extract-tilesets.mjs         # just the tilesets
 node scripts/extract-units.mjs            # just the unit data
 ```
@@ -122,7 +131,8 @@ that code disagree — `npm run test:maps`, then commit. A suite that holds for 
 `mapFiles()` (`tests/support/maps.ts`: the committed maps plus `fixtures/maps/` where present).
 **Only generated maps go in `tests/maps/` — never a Blizzard or community map.** Suites needing
 `fixtures/maps/*.scx` or `public/tileset/*.cv5` use `describe.skipIf(...)` and skip silently when the
-files are absent — **a green run does not mean the terrain, doodad and StarEdit-layout suites ran.** vitest still *runs* a
+files are absent — **a green run does not mean the terrain, doodad and StarEdit-layout suites ran.** The
+same goes for `tests/cli-build.test.ts`, which needs the vendored plugins (`npm run vendor:plugins`; CI fetches them before `npm test`). vitest still *runs* a
 skipped describe's body to collect it, so a suite that reads those files in the body (not inside
 `it` / `beforeAll`) must be guarded with `if (have) describe(...)` instead, or CI — which has no
 game data — crashes on the read.

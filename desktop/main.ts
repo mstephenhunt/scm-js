@@ -202,7 +202,7 @@ async function locate(): Promise<DesktopLocateResult> {
 
 /** Where each StarCraft build keeps its executable, relative to the install folder. */
 const EXE_CANDIDATES = process.platform === "darwin"
-  ? ["StarCraft.app", "StarCraft/StarCraft.app"]
+  ? ["x86_64/StarCraft.app", "StarCraft.app", "StarCraft/StarCraft.app"]
   : ["x86_64/StarCraft.exe", "x86/StarCraft.exe", "StarCraft.exe"];
 /** The folder Test Map writes into, under Maps, so the game lists it and nothing of the user's is touched. */
 const TEST_FOLDER = "scmJS";
@@ -257,9 +257,9 @@ function testMap(bytes: Uint8Array, fileName: string, options: { dir?: string; l
 
 /* ── Map files from the OS ──────────────────────────────── */
 
-/** A map path among the arguments the app (or a second copy of it) was started with. */
+/** A map (or replay, for the plugin that opens them: `scmjs replay open`) among the arguments the app, or a second copy of it, was started with. */
 function mapArg(argv: string[]): string | null {
-  return argv.slice(1).find((a) => /\.(scm|scx|chk)$/i.test(a) && existsSync(a)) ?? null;
+  return argv.slice(1).find((a) => /\.(scm|scx|chk|rep)$/i.test(a) && existsSync(a)) ?? null;
 }
 
 /** The file to hand the renderer once it listens: the launch argument, or a macOS open-file. */
@@ -278,7 +278,8 @@ let lastMapDir: string | null = null;
 
 function sendOpen(win: BrowserWindow, path: string) {
   try {
-    const full = mapFiles().allow(path);
+    // A replay is read and handed over only: the paths the renderer may later read and write are maps.
+    const full = /\.rep$/i.test(path) ? resolve(path) : mapFiles().allow(path);
     if (!full) return;
     lastMapDir = dirname(full);
     win.webContents.send("file:open", { name: basename(full), path: full, bytes: readFileSync(full) });

@@ -28,7 +28,7 @@ what each part does, and what to write instead of the few parts that are not the
 | [Reading the game](#reading-the-game) | Every condition's quantity as a number; facts about the players |
 | [Units](#units) | Loops over units, picks, a unit's fields and what it can be told |
 | [Events](#events) | `on.created`, `on.died`, `on.killed`, `on.morphed`, `on.order` |
-| [The game's tables and memory](#the-games-tables-and-memory) | `stats()` for costs, weapons, upgrades and colours; `memory` |
+| [The game's tables and memory](#the-games-tables-and-memory) | `stats()` for costs, weapons, upgrades and colours; `memory`; what changes with a mod |
 | [Keys, the mouse and chat](#keys-the-mouse-and-chat) | Presses, clicks, the cursor, typed lines; `local` and `sync()` |
 | [Text](#text) | Texts with values, `string` variables and their methods, lines of JSX |
 | [Sounds and imported files](#sounds-and-imported-files) | Clips made when the script is built; videos, pictures, sounds and MIDI the script imports |
@@ -98,12 +98,13 @@ program(() => {
 actions, and the program runs those actions in the game. A helper that throws while the
 script is applied is reported at the line that called it.
 
-**A `const` is what it can be.** `const limit = waves.length` is worked out when the
-script is applied. `const next = wave + 1` needs a variable of the program, so it is one,
-which TypeScript keeps you from assigning again. A constant inside a branch that is never
-built, such as `if (false) …`, is never worked out at all.
+**A `const` is worked out as early as it can be.** `const limit = waves.length` is worked
+out when the script is applied. `const next = wave + 1` needs a variable of the program,
+so it becomes a program variable too, one that TypeScript will not let you assign again. A
+constant inside a branch that is never built, such as `if (false) …`, is never worked out
+at all.
 
-**The one rule to keep in mind**: the player and the location of an action, and the amount
+**What a variable cannot reach**: the player and the location of an action, and the amount
 a condition compares with, are known when the script is applied. A variable of the program
 cannot reach them. A parameter of a function given a known value does reach them, so
 `function spawn(p: Player, n: number) { createUnit(p, units.ZergZergling, n, spawnAt); }`
@@ -168,8 +169,8 @@ Three more types hold a number that is never below zero:
 `let lives: u8 = 3` stops at its ends after the whole sum, never between its parts, which
 is what lives and cooldowns want. A `u32` is for bit masks, hashes and counts past two
 thousand million. Everything the game is asked (`minerals()`, `deaths()`, `u.hp`) is a
-`number`. A constant its variable cannot hold is an error: `let mask = 0xffffffff` wants
-`let mask: u32`.
+`number`. A constant that does not fit its variable's type is an error:
+`let mask = 0xffffffff` wants `let mask: u32`.
 
 **A `number` and a `u32` do not mix in arithmetic** without saying which is meant. `h + n`
 is an error that names the two ways out, `u32(n)` and `i32(h)`, which read the same 32
@@ -237,8 +238,8 @@ Two things are not JavaScript's:
   where it happened, since it is always a mistake.
 - **`const b = a` is a copy**, where JavaScript would give the same array a second name.
 
-In a program of every player, each player has their own copy of an array;
-`shared([0, 0, 0])` is one for everybody.
+In a per-player program, each player has their own copy of an array; `shared([0, 0, 0])`
+is one for everybody.
 
 ### Arrays that grow
 
@@ -1142,6 +1143,37 @@ program(() => {
 `memory(address, comparison, value)` and `setMemory(address, modifier, value)` reach any
 value of the game's memory by its address (EUD), in a trigger or a program.
 
+### With a mod
+
+When the editor draws from a data set other than the game's own (Help ▸ Game Data…), such
+as a mod with units of its own, the script's names follow the set. `units.`, `weapons.`,
+`upgrades.` and `techs.` list the names the set gives, and `units.` lists every unit type
+it names, past the game's 228. A trigger can name any of them.
+
+The names become identifiers the way `scmjs mod header` makes them for a bot, so a map and
+a bot made for the same mod call a unit the same thing. Each run of characters other than
+letters, digits and `_` becomes one `_`. A name that starts with a digit, or is a C++
+keyword, gets a `_` in front. A second unit of the same name gets `_` and its id, and a
+name with no letters left is `Unit_` and its id. Cosmonarchy's worker is
+`units.Terran_Mason`, and `units["Terran Mason"]` works too. The game's own identifiers,
+such as `units.TerranSCV`, are not there while such a set is in use, because the mod may
+have another unit at that id. `AnyUnit`, `Men`, `Buildings` and `Factories` stay as they
+are. A data set that keeps the game's names, one that changes only pictures or numbers,
+leaves every name as it is.
+
+A program follows the set as far as a unit's type. Its loops over units and its events
+take any type the set has, up to its count (`allUnits({ type: units.Terran_Mason })`,
+`on.created(…)`), and compare it with each unit's type as the game keeps it. The rest of a
+program reads and writes the game's memory where StarCraft's own data keeps it.
+`units.Men`, `units.Buildings` and `units.Factories` in a filter look the type up in the
+game's table of 228 types, so they say nothing sure of a mod's type past it. `stats()`
+reaches the game's 228 unit types, 130 weapons, 61 upgrades and 44 technologies. An action
+takes a unit type the program works out while the game runs, such as `u.type`, only below
+228. A mod with plugins of its own can move the game's tables, so these parts are made for
+the game's own data. While another set is in use, Problems says so on the first program,
+and so does the build in Output. Tests run in the game always run with StarCraft's own
+data, and their result says so.
+
 ## Keys, the mouse and chat
 
 **What the players do is `keyPressed`, `keyHeld`, `clicked`, `mouse` and `chatted`.** A
@@ -1224,13 +1256,13 @@ hosting one alone is enough.
 
 ### What input takes from the map
 
-Only a program that reads input takes anything for it, and nothing is a death counter, a
-switch or a string: one unit-properties slot; one unit type the map does not use (the
-Valkyrie, unless the map uses it); the location the build already keeps for orders; and
-hidden units of Player 12 at the map's top-left corner, six for each human player and six
-more when the mouse is read. Outside a program these functions are an error, where
-`if (keyPressed(…))` would otherwise quietly be true. Simulate presses no keys, so there
-they read as nothing; a [test](trigscript.md#tests) can press them.
+Only a program that reads input takes anything from the map for it, and none of it is a
+death counter, a switch or a string: one unit-properties slot; one unit type the map does
+not use (the Valkyrie, unless the map uses it); the location the build already keeps for
+orders; and hidden units of Player 12 at the map's top-left corner, six for each human
+player and six more when the mouse is read. Outside a program these functions are an
+error, where `if (keyPressed(…))` would otherwise quietly be true. Simulate presses no
+keys, so there they read as nothing; a [test](trigscript.md#tests) can press them.
 
 ### What only one computer knows
 
@@ -1346,7 +1378,7 @@ line columns up.
 The objectives, a leaderboard's label, a transmission's line and a unit type's name
 (`stats(units.TerranMarine).name = …`) take a made text, up to 255 bytes. The game shows
 the text as it was when the action ran, so when the text changes, run the action again. In
-a program of every player, each player sees their own. Any other action's text, such as
+a per-player program, each player sees their own. Any other action's text, such as
 `setNextScenario` or a sound's path, has to be written in the script.
 
 ### Lines of JSX
@@ -1408,8 +1440,8 @@ under 1 where copies overlap. Music played note by note is `trigscript/music`
 picture, a sound or a MIDI file as well as a video, and keeps the result in the map with
 the script:
 
-- a video becomes a `.video` file (`import film from "./film.video"`): its frames, a tile
-  a pixel, ink or not, for `fog.play` or `fog.light`;
+- a video becomes a `.video` file (`import film from "./film.video"`): its frames, one
+  tile per pixel, each pixel ink or not, for `fog.play` or `fog.light`;
 - a picture becomes an `.image` file: its pixels at the size chosen, which `scale`,
   `crop`, `threshold`, `tones` and `halftone` turn into rows for `fog.picture`;
 - a sound file becomes a `.sound` file: a clip for `playWav` and the music library;
@@ -1455,8 +1487,9 @@ other plugins](trigscript-library.md#libraries-from-other-plugins).
 
 ## What a program does not have
 
-Outside `program()` the script is all of TypeScript, since it simply runs. Inside one,
-these cannot become something the game does. Each is refused with a message as you type:
+Outside `program()` the script is all of TypeScript, since it runs in the editor. Inside
+one, these cannot become something the game does. Each is refused with a message as you
+type:
 
 | Not there | Write instead |
 | --- | --- |

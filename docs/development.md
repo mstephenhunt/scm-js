@@ -15,6 +15,8 @@ Each topic is written down in one place:
 | Triggers, conditions and actions | [triggers.md](triggers.md) |
 | TrigScript, the trigger scripting language | [trigscript.md](trigscript.md), [trigscript-language.md](trigscript-language.md) for the language of programs, and [trigscript-library.md](trigscript-library.md) for its standard library; the compiler is in the [TrigScript plugin](https://github.com/scm-js/plugin-trigscript)'s repository |
 | Where the graphics come from, data sets, how they are drawn | [game-data.md](game-data.md) |
+| The `scmjs` command line | [cli.md](cli.md) |
+| The `@scm-js/core` library | [core.md](core.md) |
 | Using and writing plugins, the plugin API | [plugins.md](plugins.md), and the reference at [docs.scmjs.dev/api](https://docs.scmjs.dev/api/) |
 | Each plugin's internals | its own repository's README |
 | Running, building, releasing, contributing | this file |
@@ -35,6 +37,7 @@ Node's type stripping) and git.
 git clone https://github.com/scm-js/scm-js
 cd scm-js
 npm install
+npm run doctor         # what this machine has and lacks, and what to run about it
 npm run dev            # http://localhost:5173
 ```
 
@@ -103,6 +106,8 @@ npm run dev               # Vite dev server
 npm run dev:site          # one origin over the editor and scm-sim (above)
 npm run build             # tsc -b (the type-check) + vite build → dist/
 npm run preview           # serve dist/ locally
+npm run verify            # what CI runs: lint, tests, build, browser tests (-- --quick: no build or browser)
+npm run doctor            # Node, packages, game data and the browser tests' Chromium on this machine
 npm run lint              # oxlint, with the React hook rules; does not type-check
 npm test                  # vitest, a few seconds, no browser
 npm run test:watch
@@ -118,15 +123,21 @@ npm run build:docs        # the documentation site → docs-site/
 npm run vendor:plugins    # bring plugins/ up to date (predev and prebuild run it)
 npm run bundle:runtimes   # copy the default plugins' runtimes into dist/ (desktop and image builds)
 npm run build:plugin-types    # the plugin typings → plugin-api/
+npm run dev:desktop       # the dev server and the desktop app against it, in one command
 npm run desktop           # run the desktop app against dist/
 npm run build:desktop     # installers for this OS → release/
 npm run build:image       # the container image, tagged scmjs
+npm run build:cli         # the scmjs command → cli/dist/scmjs.mjs
+npm run build:cli-binary  # scmjs as one program, Node inside, for this OS → cli/dist/bin/ (Node 24)
+npm run cli -- map info a.scx     # the scmjs command, built and run (docs/cli.md)
+npm run build:core        # the @scm-js/core library → core/dist/index.mjs + index.d.ts (docs/core.md)
 ```
 
 `npm run build` is the type-check: `tsc -b` covers the app, the scripts and the desktop
-main process (`tsconfig.app.json`, `tsconfig.node.json`, `tsconfig.desktop.json`). The app
-config is strict: `noUnusedLocals`, `noUnusedParameters`, `verbatimModuleSyntax` (so
-`import type` for types) and `erasableSyntaxOnly` (so no enums and no constructor
+main process, the command line and the library's entry (`tsconfig.app.json`,
+`tsconfig.node.json`, `tsconfig.desktop.json`, `tsconfig.cli.json`, `tsconfig.core.json`).
+The app config is strict: `noUnusedLocals`, `noUnusedParameters`, `verbatimModuleSyntax`
+(so `import type` for types) and `erasableSyntaxOnly` (so no enums and no constructor
 parameter properties). Lint, the tests and the build run on every pull request and every
 push to `main`.
 
@@ -167,6 +178,8 @@ src/
     ui/         Primitives: buttons, inputs, lists, tabs, the dialog frame, error boundaries
   styles/       Plain CSS, imported in order: tokens → base → ui → chrome → panels → viewport → dialogs → splash
 desktop/        The Electron shell: main process, preload bridge, updater
+cli/            The scmjs command line, built from the editor's code into one file (docs/cli.md)
+core/           The @scm-js/core package: one entry file naming the editor's modules it exports (docs/core.md)
 scripts/        Extraction, vendoring, the desktop and docs builds, plugin typings, screenshots
 tests/          vitest suites; tests/maps holds the maps they open, made by tests/support
 e2e/            Browser tests: Playwright specs that drive the built editor
@@ -389,9 +402,10 @@ The suites open two sets of map files:
   disagree: run `npm run test:maps` and commit the result. Only generated maps go here.
 - **`fixtures/maps/`** holds Blizzard's own maps, on a machine that has them. The suites
   about terrain, doodads and what StarEdit itself writes need these, the extracted data in
-  `public/`, or both, and skip silently when the files are absent. CI has neither, so a
-  green CI run has not exercised them. Run them locally before touching a tileset decoder,
-  the doodad code, the isometric brush or anything under `src/formats/`.
+  `public/`, or both, and skip when the files are absent. CI has neither, so a green CI
+  run has not exercised them; the CI run's Summary page on GitHub lists every suite that
+  skipped, by name. Run them locally before touching a tileset decoder, the doodad code,
+  the isometric brush or anything under `src/formats/`.
 
 Two suites are worth knowing about:
 
@@ -472,6 +486,11 @@ English and Korean ship today, chosen in Preferences ▸ General or following th
   back. The Korean was not written by a native speaker, and a native reader's review is
   welcome.
 
+The `scmjs` command line has its own catalogue, `cli/src/ko.json`, kept the same way: the
+extractor reads `cli/src/` into it as it reads `src/` into `src/i18n/ko.json`, so neither
+bundle carries the other's words. What the command leaves English is in
+[cli.md](cli.md#in-korean).
+
 Plugins get the same translator on `api.i18n`; see [plugins.md](plugins.md#apii18n).
 `.claude/internals/i18n.md` covers adding a language and the Korean particle rules.
 
@@ -484,10 +503,18 @@ while a map has unsaved changes, and holds the updater. `preload.ts` exposes tha
 page as `window.scmjsDesktop`, typed in `src/gamedata/desktop.ts`.
 
 ```sh
+npm run dev:desktop             # the dev server and the app against it, in one command
 npm run desktop                 # bundle the main process and run Electron against dist/
-SCMJS_DEV_URL=http://localhost:5173 npm run desktop    # against the dev server instead
+SCMJS_DEV_URL=http://localhost:5173 npm run desktop    # against a dev server you started
 npm run build:desktop           # web build + main bundle + electron-builder for this OS
 ```
+
+`npm run dev:desktop` starts the dev server, waits until it answers, then opens the app on
+it. Closing the window or Ctrl+C stops both. Anything after `--` goes to Electron
+(`npm run dev:desktop -- --remote-debugging-port=9222`), and `DEV_DESKTOP_PORT` moves it
+off
+5173. The page reloads on edits as it does in a browser, but the main process and the
+preload are bundled once at launch, so a change under `desktop/` needs the app restarted.
 
 `npm run build:desktop` takes the platform, architectures and targets on the command line;
 with none it builds this OS with the targets `electron-builder.yml` lists, which is what
@@ -682,7 +709,7 @@ ruleset.
 ## Docs site and screenshots
 
 [docs.scmjs.dev](https://docs.scmjs.dev) is built by `npm run build:docs`. The guides are
-the eleven `docs/*.md` files, split at their `##` headings into pages, with the `###`
+the thirteen `docs/*.md` files, split at their `##` headings into pages, with the `###`
 beneath as each page's contents. The API reference is generated from the bundled plugin
 typings, so a doc comment in `src/plugins/api.ts` is a paragraph on the site.
 
@@ -732,9 +759,30 @@ Some scenes have their own needs:
   `scripts/lib/guide-scmjs-mock.mjs`, which the script starts itself. When a dialog
   changes, change the scene; when a canned answer no longer fits, change the mock.
 
+### Command line screenshots
+
+The command line guide's pictures, `docs/images/cli-*.webp`, are made by
+`scripts/cli-screenshots.mjs`. It builds `scmjs`, runs real commands with colour forced
+on, draws their output as a terminal in headless Chromium, and writes WebP files. Its
+inputs are the generated maps in `tests/maps/`, maps `scmjs map generate` makes, and
+replays the game engine saves; never point it at a Blizzard or community map.
+
+```sh
+node scripts/cli-screenshots.mjs                       # → docs/images/cli-*.webp
+node scripts/cli-screenshots.mjs --only map-info,map-check
+node scripts/cli-screenshots.mjs --play-url http://127.0.0.1:8766/play --bots ~/bots
+```
+
+The map pictures need a copy of StarCraft, and the pictures of commands that run the game
+need the play page's engine too: `--play-url` points at a staged play page when the newest
+runners are not deployed yet. The ladder and the replay picture need built bots (`--bots`,
+a folder with `ualbertabot.scmbot` and `example.scmbot`). A picture whose inputs are
+missing is skipped and its file left as it is. The terminal for `replay watch` comes from
+util-linux's `script`, so that picture is taken on Linux.
+
 ## Contributing
 
-- **Keep the documents current.** The eleven guides under `docs/` are the documentation
+- **Keep the documents current.** The thirteen guides under `docs/` are the documentation
   site and `README.md` is the repository's front page; a behaviour change that is not in
   them is undocumented. Write them for their readers, with `src/` paths only in a guide's
   closing *In the source* section. Keep the matching note in `.claude/internals/` in step
@@ -746,10 +794,11 @@ Some scenes have their own needs:
   [ATTRIBUTION.md](../ATTRIBUTION.md#maintenance-rule): a provenance comment beside
   adapted algorithms and tables, an entry there naming the source and licence, and the
   original notice kept.
-- **Run what CI runs**: `npm run lint`, `npm test` and `npm run build`, and
-  `npm run test:e2e` after a change to the chrome. With the game data and fixture maps on
-  disk the real-data suites run too, and that is the run that counts for anything under
-  `src/formats/`.
+- **Run what CI runs**: `npm run verify` runs lint, the tests, the build and the browser
+  tests, and ends with a summary for the pull request: what passed, each test suite that
+  skipped (by file and name, with how many tests), and what could not run on your machine
+  at all. With the game data and fixture maps on disk the real-data suites run too, and
+  that is the run that counts for anything under `src/formats/`.
 - **Plugin API changes are additive.** `PLUGIN_API_VERSION` stays where it is for an
   addition. Document the addition in `docs/plugins.md` and with a doc comment in
   `src/plugins/api.ts`, which the reference is generated from. The example plugin at

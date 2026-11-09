@@ -33,8 +33,8 @@ Plugins ▸ Browse Plugins….
   plays back and is analysed: fights, economy and tech. See
   [Replays](docs/guide.md#replays).
 - **Test in the game or the browser.** Tools ▸ Test Map puts the map in the game's Maps
-  folder; at scmjs.dev, Tools ▸ Test Map in Browser plays it in a browser tab from your
-  own StarCraft files. See [Test Map](docs/guide.md#test-map).
+  folder; at scmjs.dev, Tools ▸ Test in Browser plays it in a browser tab from your own
+  StarCraft files. See [Test Map](docs/guide.md#test-map).
 - **Several people on one map.** Share the open map and anyone with the link edits it with
   you, live. See [Editing a map together](docs/guide.md#editing-a-map-together).
 - **Triggers as code.** [TrigScript](docs/trigscript.md) writes triggers in TypeScript,
@@ -111,6 +111,9 @@ same release as the editor at [scmjs.dev/editor](https://scmjs.dev/editor/).
 | [docs/file-formats.md](docs/file-formats.md) | What the editor does with a map file: what it preserves, what Save can strip, revisions, protected maps |
 | [docs/chk-format.md](docs/chk-format.md) | Every section of the scenario file, byte by byte |
 | [docs/plugins.md](docs/plugins.md) | Writing and installing plugins; the plugin API |
+| [docs/cli.md](docs/cli.md) | The `scmjs` command line, by task: getting started, looking inside a map, making and changing maps, maps in git and CI, running a map's triggers in the game, replays, sharing, mods, bots, plugins and AI tools, and a reference of every command |
+| [docs/mods.md](docs/mods.md) | Mods: a mod read as its makers ship it, kept as a folder of PyMS text and PNG sheets, checked, compared, packed back into an MPQ and played |
+| [docs/core.md](docs/core.md) | `@scm-js/core`, the editor's map code as an npm package for scripts and tools of your own |
 | [docs/development.md](docs/development.md) | Running from source, the desktop app and the container, releases, contributing |
 | [ATTRIBUTION.md](ATTRIBUTION.md) | Provenance of adapted algorithms, tables and dependencies |
 

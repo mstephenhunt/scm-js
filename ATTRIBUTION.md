@@ -131,6 +131,15 @@ the community's disassemblers, none of whose code is included:
 - [IceCC](https://github.com/andreas-volz/icecc), by Jeff Pang (2000-2002) with
   modifications by ShadowFlare (2006-2007), GPL-2.0. A reference only.
 
+### QR Code generator
+
+`cli/src/qr.ts`, the encoder behind the command's `--qr`, follows the structure of
+[Project Nayuki's QR Code generator library](https://www.nayuki.io/page/qr-code-generator-library),
+MIT-licensed, copyright Project Nayuki: its count of data modules, alignment pattern
+spacing, Reed–Solomon divisor and block interleaving. It is cut down to byte mode and two
+error-correction levels; the penalty rules are written from the QR Code standard
+(ISO/IEC 18004). The file carries a provenance comment.
+
 ### Format references
 
 The file formats are decoded independently in `src/formats/`, from these public
@@ -154,7 +163,15 @@ descriptions:
 - `src/formats/wav.ts` follows the RIFF/WAVE container and the IMA and Microsoft ADPCM
   specifications as published; the codecs are original.
 - PyMS, above, is also the compatibility reference for the DAT, GRP, PCX, TBL and LO
-  decoders.
+  decoders, and for the mod codecs beside them: the field names and layouts of every
+  `.dat` table (`src/formats/dat/schema.ts`), and the text forms PyDAT, PyTBL, PyLO, PyICE
+  and PyAI write, which those codecs read and write. None of its code is included.
+- [aise](https://github.com/neivv/aise) by neivv (Apache-2.0) is the reference for the AI
+  script commands it adds (opcode numbers, as PyMS lists them); a reference only.
+- GPTP's DatExtend and grafting loaders, as published with Cosmonarchy's sources, are the
+  reference for the `.datex` table layout and the `.graft` binary files; the CMBW editor's
+  `graftc` notes are the reference for the `.graft` text. References only.
+- The PNG specification (W3C) for `src/formats/png.ts`; zlib is the platform's.
 - Maps written by StarEdit and Blizzard's own maps are the ground truth the tests
   re-encode byte for byte. They stay in the gitignored `fixtures/`.
 
@@ -195,6 +212,35 @@ at the root of the bundle (`scripts/lib/notices.mjs`, run from `vite.config.ts`)
 web zip, the installers, the hosted sites and the container image all carry them. The
 list is read from `package.json`'s dependencies and from the vendored plugins rather than
 kept by hand, and a dependency with no license file fails the build.
+
+### In the `scmjs` command
+
+The command line (`cli/`) is built into one file from the editor's own code and these
+packages:
+
+| Project | Use | License |
+| --- | --- | --- |
+| [Commander.js](https://github.com/tj/commander.js) | the commands, their options and help | MIT, copyright 2011 TJ Holowaychuk |
+| [picocolors](https://github.com/alexeyraspopov/picocolors) | colour in the terminal | ISC, Oleksii Raspopov, Kostiantyn Denysov, Anton Verinov |
+| [@scm-js/replay](https://github.com/scm-js/replay) | reading replays | MIT, copyright 2026 scmJS |
+| [mopaq](https://github.com/jeany55/mopaq) | reading MPQ archives | MIT, copyright 2026 Jeany |
+| [kascade](https://github.com/jeany55/kascade) | `map preview`: the tileset out of a StarCraft: Remastered installation | MIT, copyright 2026 Jeany |
+| [fflate](https://github.com/101arrowz/fflate), through mopaq | zlib decompression | MIT, copyright Arjun Barrett |
+| [MCP TypeScript SDK](https://github.com/modelcontextprotocol/typescript-sdk) | `scmjs mcp`: the Model Context Protocol server | MIT, copyright 2024 Anthropic, PBC |
+| [Zod](https://github.com/colinhacks/zod) and [zod-to-json-schema](https://github.com/StefanTerdell/zod-to-json-schema) | the MCP tools' input schemas | MIT, copyright 2025 Colin McDonnell; ISC, copyright 2020 Stefan Terdell |
+| [Ajv](https://github.com/ajv-validator/ajv) with ajv-formats, fast-deep-equal, fast-uri and json-schema-traverse, through the SDK | JSON Schema validation | MIT, copyright 2015–2021 Evgeny Poberezkin; fast-uri BSD-3-Clause, copyright Gary Court and the Fastify team |
+| [vscode-languageserver](https://github.com/microsoft/vscode-languageserver-node) with vscode-languageserver-protocol, vscode-languageserver-types, vscode-jsonrpc and vscode-languageserver-textdocument | `scmjs lsp`: the Language Server Protocol server | MIT, copyright Microsoft Corporation |
+
+Its build (`scripts/build-cli.mjs`) writes their license texts into
+`cli/dist/THIRD-PARTY-NOTICES.txt`, which the published package carries. The list is read
+from the modules the bundle holds, so a new import cannot go in without its license.
+
+### In the `@scm-js/core` library
+
+The library (`core/`, [docs/core.md](docs/core.md)) is built from the editor's own code
+with [mopaq](https://github.com/jeany55/mopaq) as its one dependency, installed rather than
+compiled in. Its build (`scripts/build-core.mjs`) writes `core/dist/THIRD-PARTY-NOTICES.txt`
+only when a package's code is in the bundle, which today none is.
 
 ### Plugin runtimes
 
@@ -272,6 +318,7 @@ The copyright holders of each MIT-licensed project are named above. The shipped 
 adapted material under this notice carry these copyrights:
 
 - Copyright (c) 2015-2026 Justin Forsberg (Chkdraft)
+- Copyright (c) Project Nayuki (QR Code generator library, adapted in the `scmjs` command)
 - Copyright (c) Meta Platforms, Inc. and affiliates (React and React DOM)
 - Copyright (c) 2020 Poimandres (Jotai)
 - Copyright (c) 2022 WorkOS (Radix UI)

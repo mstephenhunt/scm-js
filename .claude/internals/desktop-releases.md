@@ -70,6 +70,20 @@ any new job that runs on `ci` needs the same), `nightly` (a daily cron, skipped 
 installers on ONE rolling prerelease whose `nightly` tag is force-moved and whose assets are
 replaced with `gh release upload --clobber`, never deleted and recreated) and `v*` tags (permanent
 numbered releases, the only ones that accumulate).
+The `cli` job publishes `@scm-js/cli` to npm on `v*` tags only (its version is the editor's; see `cli.md`).
+**The command as single executables** (2026-11-07, branch `cli-binary`; `cli.md` "Installing" + "Downloading the program"): the
+`cli-binary` matrix (ubuntu-latest → linux-x64, windows-latest → win-x64, macos-latest → darwin-arm64
+*and* darwin-x64, the Intel one's Node run under Rosetta) runs `scripts/build-cli-binary.mjs --archive
+--check` on Node 24 (`SEA_NODE_VERSION`) on the nightly and stable channels **and on pull requests**
+(read-only, artifacts `cli-binary-<os>` only — the third job a pull request runs, which the header
+comment now says; pushes to main skip it). `release` needs it beside `desktop`, downloads
+`{web-zip,desktop-*,cli-binary-*}`, and writes **`SHA256SUMS` over every asset** (installers too)
+before `gh release create`/`upload --clobber`; Scoop's autoupdate reads the zip's line from it. So a
+failed executable blocks the release as a failed installer does. The recipes the user publishes are
+`packaging/` (Scoop bucket, winget-pkgs, Homebrew tap; `packaging/README.md`), filled per release by
+`scripts/release-recipes.mjs <version>` from that SHA256SUMS. No macOS capacity trap is recorded
+here: the matrix uses the same `macos-latest` label as `desktop`, one Mac job per run, not a second
+(Intel) Mac runner.
 **Both hosted builds are releases**: the `pages` job serves the *tag* at `editor.scmjs.dev` (it was
 main's HEAD, which was the one artifact whose version nobody could get back to) — which needs the
 `github-pages` **environment** to allow the tag: its deployment policy listed the `main` branch alone,
@@ -273,7 +287,8 @@ electron-builder writes it into `latest*.yml`. A release is cut by the **Release
 (`.github/workflows/release.yml`, manual dispatch), never by hand: it refuses to run off main,
 over an existing tag, or backwards past the last release, runs lint/tests/build *before*
 writing anything, then commits the release version (the whole diff is `"version"` in
-package.json and the lock; skipped when it already says it) and annotates `vX.Y.Z` on that
+package.json, the lock, cli/package.json and core/package.json — the npm packages carry the editor's version, and
+until 0.12.1 only their builds stamped it, so the committed files went stale; skipped when it already says it) and annotates `vX.Y.Z` on that
 commit. It then **dispatches** build.yml on the tag — one dispatch is the whole release, hosted
 editor included — because a push made with `GITHUB_TOKEN` starts no workflow run while
 `workflow_dispatch` through the API is the exception. A tagged release's notes are `docs/releases/<version>.md` — committed on main
@@ -365,3 +380,14 @@ beside it), stable → the GitHub provider (releases/latest). And an update is
 nightly, nightly on and off. A build from before the fix cannot find the fixed nightly by itself:
 install it once from the release page. `message()` trims electron-updater's errors, which otherwise carry the whole HTTP
 response — headers and `Set-Cookie` — into the dialog.
+
+**v0.12.0 (2026-11-08) has no release page.** Its tag build's release job created the release, then an asset upload got
+`HTTP 404` and gh removed the release: the command line's `scmjs-windows-x64.zip` and the desktop's
+`scmJS-windows-x64.zip` differ only in case. The command's archives are `scmjs-cli-<os>-<arch>` since (cli.md). Everything
+else of 0.12.0 published (Pages, docs, npm, image); 0.12.1 is the release with the page. A release asset name must not
+collide with another's case-insensitively. Nothing checked that before the upload — the nightly's release job does not
+run on a plain push to main, so a pull request's dry run and the nightly both missed it — until the release job's step
+"Asset names differ in more than case" (2026-11-08, branch `cli-action`): `ls assets | sort -f | uniq -di`, and any
+name that comes back fails the job with the pair named, before the checksums and `gh release create`. It runs only
+where the release job runs (a tag, a dispatch, the nightly), so a pull request still cannot see a clash; the header of
+`scripts/build-cli-binary.mjs` says why the command's archives are `scmjs-cli-…`.

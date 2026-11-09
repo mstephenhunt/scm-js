@@ -1,0 +1,297 @@
+# Mods: the folder and `scmjs mod`
+
+Slice M3 of the mods plan (scm-sim branch `mods-plan`, `docs/mods-plan.md`; built 2026-11-08 on branch `mod-cli`, from
+`mods-formats` = M2's codecs, see `units.md` "Codecs for mods (M2)"). The reader's page is `docs/mods.md` (the
+fifteenth guide) and the "Mods" page of `docs/cli.md`.
+
+## Where things are
+
+- **Core (pure, exported from `core/src/index.ts`, "Mods: a mod as a folder" block):**
+  - `src/formats/mod/sources.ts` — `gameName` (lower case, backslashes: the key everywhere), `modRoot` (the game's
+    paths at the root or **one folder down only**, so `unit/terran/` under a root is not a second root),
+    `exeArchive` (FireGraft `PEGF` overlay first, then SEMPQ at 512-byte boundaries after the PE's last section, then
+    any `MPQ\x1A` with a sane header), `readZip` (central directory, stored + deflate via
+    `DecompressionStream("deflate-raw")`, no zip64/encryption), `dataSetHash`.
+  - `src/formats/mod/hash.ts` — the mod hash (`modHash`, `modHashOfDigests`, `hashLines`, the line forms) and
+    `probeNames` for a list-less archive; "The mod hash, one rule" below.
+  - `src/formats/mod/folder.ts` — the form: `placeOf(member)` (rule: member → folder file), `memberOf(file, manifest)`
+    (inverse, with `manifest.members` overrides), `renderMember` / `renderAiScripts` (unpack, checked), `packFile`
+    (pack), `recordRendered` + `tidyManifest` (the manifest), `ModManifest` (`mod.json`).
+  - `src/formats/mod/data.ts` — `loadModData`: each table/string table/iscript the mod's else the game's, the game's
+    own beside, `ownEntry` (added past the game's count, or `rowChanges` non-empty vs the game's row; without a game,
+    past the standard count), `namesOf` (unitnames.tbl[id] when non-empty, else stat_txt[id] for id < 228; labels
+    1-based into stat_txt).
+  - `src/formats/mod/check.ts`, `diff.ts` — the lints and the changelog.
+- **CLI:** `cli/src/mod/{source,open,unpack,pack,info,check,diff,new,play,overlay}.ts`; registrations in `main.ts`
+  under `mod`; MCP tools `mod_info|check|diff|unpack|pack|new` in `mcp.ts`. `engine.ts` gained `EngineCurrent.mods`,
+  `Engine.mods`, `MOD_OVERLAY = 1`, `modArgs`; `maptest.ts`/`trace.ts` an option `mod: { folder() }`.
+
+## Decisions (taken by the user, 2026-11-08 — do not reopen)
+
+- PyMS's dialects and graftc's text are *the* text forms; indexed PNG sheets with the palette named (default
+  `jungle`; `mod.json` `palette`; the mod's own `tileset\<name>.wpe` first, else the game's).
+- aise-fork raw AI regions stay `raw_bytes(...)` lines (lossless) with a note in `mod.json`.
+- Names for the AI text and the tables' header comments: the mod's `stat_txt.tbl` / `unitnames.tbl` when it has
+  either, else the game's (`manifest.names`: `mod` | `game` | `none`).
+- `mod pack` writes each table in the layout it came from; the browser and the command line never write an exe.
+
+## The check is the packer
+
+`renderMember` renders, then calls **the same helper `packFile` uses** on the text *as read back through UTF-8*
+(`asRead`), and keeps the text only when the bytes are identical; else `files/<path>` + `kept[{why, files}]`.
+`reason()` strips numbers (`frame N`, `line N`) so alike failures group. GRPs: first the cheap
+`encodeGrpImage(decodeGrpImage(b)) === b` (Cosmonarchy's other-encoder GRPs fail here: "another encoder wrote it"),
+then PNG and back. At pack a sheet uses **its own PLTE** when indexed with 256 entries (so no game copy is needed for an
+untouched or palette-keeping edit); only an RGBA sheet needs the named palette (`packFolder` looks palettes up ahead:
+the folder's `tileset\<name>.wpe`, else the game's).
+
+**Names must be computed the same way at unpack and pack** or the AI text resolves differently: `names: "mod"`
+uses only the mod's own files at both ends (no game), `"game"` the mod over the game at both ends (pack then needs a
+copy and says so). `aiNames` blanks duplicate names (later ones) and names that read as numbers.
+
+## mod.json
+
+`scmjs` (format 1), name, version, authors, licence, base, layers, palette, names, tables `{t: {file, layout, entries,
+legacy?}}`, encodings `{file: TextEncoding}` (detectTextEncoding says `utf-8` for pure ASCII — fine, it round-trips),
+members `{file: member | [ai, bw]}` only where the path does not give the member back exactly, plugins/firegraft
+`[{name, bytes, file, member?}]` (`member` = it was inside the mod's archive, so pack puts it back), maps, kept, notes.
+Sorted by `tidyManifest` so the same folder writes the same file.
+
+## Lints (`check.ts`) — scoped so the game's own data is clean
+
+The game's own data has leftovers (5 iscript ids no image uses, 29 weapons no unit/order uses, 4 sfx rows naming
+missing WAVs, duplicate unit names Tank Turret/Duke Turret/Unused…), so the soft lints judge only what the mod
+**added or changed** (`ownEntry`): weapon-unused, sound-missing, iscript-unused (ids not in the game's iscript; without
+a game, ids > `GAME_ISCRIPT_LAST` = 411), duplicate-name, button-set "no buttons". Hard lints over every entry of the
+mod's tables: `dangling` (ref ≥ target count, except "none" = the target's **standard** count — 130 weapons, 228
+units — or all-ones; Cosmonarchy's datex tables still use 130/228 as none), `string-past` (1-based, 0 none; units'
+`sublabel` skipped: not a string id), `iscript-missing`. `grp-missing`/`lo-missing`: images the mod owns, or every image
+when the mod has images.tbl; a path absent from the mod and (game known) the game. `baseHas` probes
+`unit\terran\marine.grp` and `sound\misc\buzz.wav` and answers null (unknown) for a kind the copy has neither of.
+(It was written believing a Remastered copy has no 1.16.1 GRPs/WAVs; it has both at the classic names — see
+"Remastered copy and the engine's reload" — so on either copy both probes answer and the lints look.) `requirement`: graft entry ids past units/upgrades/techdata/orders by file name. `layout-mix`: expanded and
+datex tables together (sfxdata excluded: GPTP reads sfxdata.dat).
+
+## Proofs (2026-11-08, this machine)
+
+1. The game's own data members (`gameSource` over `archiveFiles(fixtures/data)`: 11 tables, 6 TBLs, iscript, both AI
+   scripts, every `unit\…` path images.tbl names = 832 GRPs + 96 overlays, the PCX palettes, jungle.wpe — 1,018
+   members): unpack 22 s, pack 19 s, **1,018 of 1,018 byte-identical**, nothing kept as bytes. AI text has 71
+   `raw_bytes` lines (padding). `mod check` on it: **no findings**.
+2. Cosmonarchy's release folder (`release/`: the FireGraft exe's archive, then `mpq/`): info names it "Cosmonarchy BW"
+   (the folder's one exe with an archive), 11 extended tables (10 `.datex`, sfxdata.dat expanded 20,000). Unpack
+   26.7 s, 960 MB: 11 tables, 8 TBLs, 6 iscripts, AI (32,224 raw_bytes lines), 306 overlays, 6 grafts, **169 GRPs as
+   PNG**, 1,441 GRPs kept ("another encoder"), 37 GRPs refused at the time (uncompressed GRPs, the interface pictures'
+   own format — read and written since 5e631bc, so 206 come out as PNG now; `units.md` has the finding), 3,516
+   WAVs, 2,265 other files. Pack 13.1 s: **7,767 of 7,767 members byte-identical**, plus the two FireGraft files back
+   in as members; the MPQ (zlib) 774 MB in 52 s. (Since `mod-hash` the two dot files count: 7,769, 2,267 other
+   files; the unpacked folder hashes as the release, `ac3f86533e4b5a31`.)
+3. `tests/cli-mod.test.ts` (15; 12 without data), `tests/cli-mcp.test.ts` "the mod tools".
+
+## Traps
+
+- `/\.datex?$/` means ".date" + optional "x" — it does not match `.dat`. Use `/\.dat(?:ex)?$/` (cost a debugging run).
+- A Blizzard archive's `(listfile)` is partial (BrooDat lists 22 files). `source.ts` probed the game's names in every
+  archive until `mod-hash`; now, as the play page, a listed archive is its list and only a list-less one is probed, so
+  BrooDat.mpq named as a mod reads as its 22 listed files. The proofs over the game's own data use `gameSource` (names
+  given), not this.
+- Building the CLI stamps `cli/package.json`'s version; restore it before handing back (`git checkout cli/package.json`).
+- The overview holds 23 lines: `mod` took `about`'s row (`about` is hidden there, still works and is in the docs; hidden also drops it from shell completion, `tests/cli-maps.test.ts` says so).
+- `tests/core.test.ts` now walks `cli/src/**` (it read only `cli/src/*.ts` before, so subfolder imports were unchecked).
+
+## Remastered copy and the engine's reload (2026-11-08, branch `cli-remastered-unit`)
+
+The gap: `map test|trace|cost --mod` with an iscript/picture/startup-data mod on a **Remastered** copy stopped with
+"neither the mod nor the game has unit\zerg\avenger.grp". The brief blamed the command's reader (`gamefiles.ts`); it
+was not. **The runner reads the installation itself** (it gets `--starcraft <folder>`): scm-sim
+`src/exact/gameCopy.ts#remasteredFiles` reads, before the game, only the tileset names + `ENGINE_DATA` (its storage is
+async and the game reads synchronously), so the reload's 928 `unit\…` files and `arr\mapdata.*` were never there.
+`gamefiles.ts#storageFiles` already answered every one of them, measured: all 928 images.tbl files (832 GRPs + 96
+`.lo?`) present and **byte-equal to fixtures/data's 1.16.1 archives**, 11.6 MB; 1,118 of the 1,123 sfxdata sounds
+(Remastered's own WAVs at the root names, 278 MB; 1.16.1's are under `SD/`); all 137 `PLAY_MEMBERS`.
+
+The fix is on this side, because the runner takes `--mod` repeatedly (later wins) and reads a folder layer lazily
+(`looseLayer`): `mod/overlay.ts#gameLayer` — on a Remastered copy, for a mod the runner will reload for (same rule as
+scm-sim's `readsStartupData`: a `STARTUP_NAMES` file or a `unit\` file) — reads the `STARTUP_NAMES` plus every file
+images.tbl names (the mod's images.tbl when it has one) that the mod has not got, from `gamefiles.ts`, 24 at a time
+(~0.4 s warm, 935 files, 11.8 MB), writes them to a second temp folder, and the runner gets `--mod <game> --mod <mod>`.
+No sounds: the reload reads only `sfxdata.dat/.tbl`; WAVs are asked for in play and a refused one is harmless (the
+runner without a mod has none from Remastered either). A 1.16.1 copy: no layer (its archives hold them, the runner
+reads those). Because the game layer is a mod layer, the runner's `start.mod` counts it: `ModOverlay.report` takes it
+out (`paths` without it, `files` = the mod's own, `read` filtered to the mod's names, `game: n` added). The start
+line's `mod` is now kept: `TraceStartLine.mod` / `TestStartLine.mod` (`engine.ts#RunnerModReport`), in `map
+trace|cost --json` and `map test --json` as `mod`, and printed under the first line by `engine.ts#modWords`.
+
+Proof (this machine, Remastered 1.23.10.13515, scm-sim `mods-plan` 287b592's runner bundled):
+`tests/cli-mod.test.ts` "map trace --mod on a Remastered copy" — the runner tests' marine-and-depot scene, 40 EUD
+rows reading the frame set (dword at image +0x18, images at 0x52F568, 64 bytes, used from slot 4999 down) of images
+4980–4999, hyper triggers for 200 passes in 400 frames; the mod = the game's iscript with the marine's GndAttkRpt
+`playfram 51` → 34. Reload served 936, **refused none**; frames 34–50 / 51–67 seen 345 / 95 passes without, 369 / 71
+with (24 = 12 shots × marine + shadow moved). Without the layer the bundled runner fails as above (checked).
+The same mod through `--starcraft fixtures/data` (1.16.1, no layer): the same 369 / 71.
+
+Not done (scm-sim's side, read-only here): `gameCopy.ts#remasteredFiles` could hold the reload's files itself when a
+mod reloads; then this layer is redundant (harmless: same bytes). Sounds by name in play on a Remastered copy are
+still refused by the runner. `protoss\archon\parmin00.wav` is only under `SD/` in Remastered (neither the play set
+nor `gamefiles.ts` falls back to `SD/`).
+
+## Replays of a mod (R1, 2026-11-08)
+
+A replay's `SCMJ` section names the mod by its hash. `scmjs replay info --mod`, `map trace|cost --replay --mod` check a
+mod against it with `cli/src/replaymod.ts#sourceHashes` / `isTaggedMod`: the one rule below (with or without plugins),
+and R1's two older forms (game files alone; those differing from the person's copy) for replays tagged before it.
+Details and the loader proof: `cli.md` "A replay's mod".
+
+## The mod hash, one rule (2026-11-08, branch `mod-hash`)
+
+Decided 2026-11-08 (mods plan, "R1, as built": the old rule compared a mod with the person's own copy, so one release
+hashed three ways). Implemented by the play page (scm-sim `lift-ts`: `src/mods/inspect.ts` `hashLines`/`pluginLine`/
+`firegraftLine`/`runningHash`, `web/modDrop.ts#buildMod`); here `src/formats/mod/hash.ts` (core: `modHash`,
+`modHashOfDigests`, `hashLines`, `pluginLine`, `firegraftLine`, `probeNames`), `cli/src/mod/hash.ts#sourceHash`, the
+editor's `overCopy.ts#dataSetHashOf` (`gamedata.md` "Hash"), Aftermath's `modreplay.ts` (loose files only).
+
+- One line per game name the mod lays over the game: loose files under its root and the members of its archives (an
+  `.mpq`, the archive in a loader exe), lower case, backslashes. An archive's **list** is its files; only a list-less
+  archive is probed (`probeNames` = the page's `namesToProbe` list + the archive's own images/sfxdata/portdata.tbl
+  paths; the page also reads the person's copy's three tables there — the one place its set can depend on a copy). A
+  listed member the archive does not hold (`fileInfo` null) is left out (`ModSource.unheld`, printed by `mod info`). An
+  archive member `.qdp/.bwl/.fgp/.fgd` is never a game name.
+- One line per plugin carried **as a file** (`.qdp`/`.bwl` anywhere in the folder): `plugins\<leaf>` lower case,
+  first wins by leaf. A plugin *inside* the mod's archive is no line (the page does not load it).
+- One line per FireGraft project `.fgp` (loose, or a member): `<leaf>` lower case. `.fgd` is no line.
+- `name\tsha256`, sorted by name, joined `\n`, SHA-256, 16 hex. Without plugins = the same minus the plugin lines
+  (the `.fgp` line stays): what a page running none presents (`runningHash` with nothing running).
+- Loose-file rule, as the page's: `modRoot` now looks at any depth (the page's; it was root-or-one-down); under the
+  root, a file beside the game's folders, under a top `plugins/` or `firegraft/`, or a `.dll` is left out; `mod.json`
+  at the top is the name, deeper it is a file. **Dot files count** (the page counts them); dot *folders* are still
+  skipped here (`walk`, pack's `folderFiles`) — the page's drop walk does not skip them, so a `.git/` *under the mod's
+  root* would be hashed there and not here (a page-side fix to ask for). Pack keeps dot files now (`files/lua/.gitignore`
+  round-trips) and leaves a top-level dot file out of "left".
+- A mod folder (`mod unpack` output) packed in memory keeps code members (`Firegraft\*.fgp` back in as members) out of
+  `source.files`, so it hashes as the release it came from.
+
+**Test vector.** Cosmonarchy's release folder (read-only, `SCM_COSMONARCHY` or `SCMJS_COSMONARCHY/release`):
+**`ac3f86533e4b5a31`**, without plugins **`b13e467fb5abb298`** — page's `buildMod` and `scmjs mod info` alike, and the
+unpacked folder too. 7,777 lines: 7,769 game names + 7 plugin lines + `cosmonarchy bw.fgp` (the brief's "7,762 game
+names" was the page's `built.lines` (7,770, which holds the `.fgp`) less 8). The CLI counted 7,767 before; the
+line-by-line diff of the game names (page vs CLI) was exactly two, both dot files the CLI's walk skipped:
+
+```
+433d432   < lua\.gitignore
+7366d7364 < unit\cmdbtns\.cmdicons.grp-ojvamg
+```
+
+Not the six phantom members (both left them out already: `fileInfo` null), not case, not `.qdp`/`.fgp` counted as game
+names. `plugins\apply`, `plugins\pluginlist.txt` and five `firegraft\*.txt` are game names (members of the exe's
+archive), on both sides.
+
+**`mod play` hands every file** (no comparison with the copy any more; the page keeps those that differ), loose
+plugins under `plugins/`, FireGraft files under `firegraft/`, and the game names the page would not take loose
+(`play.ts#notLoose`: no folder, top `plugins\`/`firegraft\`, `.dll`/archive/code extensions — Cosmonarchy's 7 above)
+inside one stored MPQ `scmjs-members.mpq`. Proof: the hand-over run through the page's own `buildMod` (pieces as
+`inputFromHanded` makes them) gives `ac3f86533e4b5a31` / `b13e467fb5abb298` for the release and the made mod's pinned
+values. Without the MPQ the page's hash of a hand-over lost those 7 lines.
+
+**Made mod** (`tests/mod-hash.test.ts`, no game data): loose `arr/units.dat`, `lua/.gitignore`, `plugins/x.qdp`,
+`y.fgp`, `y.fgd`, `README.md`, and `made.mpq` (`rez\stat_txt.tbl`, `sound\made\new.wav`, `plugins\apply`); the page's
+tool on the same folder: **`a8069f18058ec876`** / **`ac98e7b447476c80`**, pinned. The test checks the CLI (folder,
+unpacked folder), the editor's `dataSetHashOf`, `playSet`, and the replay forms against them.
+
+Known gaps: `mod pack --folder` writes members loose, so a loose copy of a mod whose archive held `plugins\…`,
+`firegraft\…` or top-level members, or whose plugins were loose beside it, hashes otherwise on the page (only an MPQ
+carries those); the editor's folder route takes loose files only under `GAME_FOLDERS` (the page: anything under the
+root) and orders own archives by name (the page: as given); the page's `GAME_FOLDERS` lacks `datreq`, `samase`,
+`lua`, `config` for finding the root (scoring only).
+
+## `mod header` (C4 of the capstone, 2026-11-08, branch `mod-header`)
+
+`cli/src/mod/header.ts`: `<Mod>.h` (C++17, `inline const BWAPI::UnitType X(id);` in `<Ns>::UnitTypes` / `WeaponTypes`
+/ `UpgradeTypes` / `TechTypes`, `constexpr int` in `<Ns>::Ids::{Units,Weapons,Upgrades,Techs}`, `MOD_NAME`, `MOD_HASH`
+= `sourceHash().hash`, the full one) and `<Mod>.ids.json`; `--bot` adds `mod: { name, hash, link? }` to the bot's
+`scmbot.json` (in place when present, else last; `link` from `mod.json`'s `link`/`url`/`homepage`). The toolchain side
+(the `.scmbot` header's `mod`, the runners' "made for" line) is scm-sim's, `docs/mods-plan.md` "C4, as built".
+- **Names** (`modNames`): `loadModData` → `namesOf` with two GPTP additions found on Cosmonarchy. (1) `rez\stat.txt`,
+  PyTBL text a plugin loads as the game's strings: weapons' labels are 2000+ and `stat_txt.tbl` has 1,813 entries.
+  It fills only entries the tbl leaves empty or does not reach — **not** an override: at the techs' labels (313…) the
+  text holds button tooltips ("Memphis Requires: Scrapyard") where the tbl is empty or right. (2) `arr\weapons.txt`,
+  `upgrades.txt`, `techdata.txt`: the makers' name lists, one line an entry, taken over the labels when the line
+  count equals the table's count (1,001 / 100 / 100); the techs' labels are junk without them. Units stay
+  `unitnames.tbl` (as the editor and the page); `arr\units.txt` (3,003 lines) is not used.
+- **Identifiers**: runs of non-`[A-Za-z0-9_]` → `_`, trimmed; leading digit, a C++ keyword or a Windows macro name →
+  `_` prefix; nothing left → `<Kind>_<id>`; duplicates: first keeps, later `_<id>`. Skipped: empty, None, Reserved,
+  Unused (with a bracketed subname too), `*`, `Extended Tech #n` (a data editor's filler).
+- **Cosmonarchy** (release, hash ac3f86533e4b5a31): 621 units, 330 weapons, 67 upgrades, 54 techs, all identifiers
+  unique; Mason 7, Ministry 106, Supply Depot 109, Stockade 111, Quarry 174, Talos 20, Maverick 0, Sieve 419,
+  Ogun 494 (worker mode) / 497 (smithy mode). The header compiles with the toolchain's flags, plain and MSVC-compat
+  (em++ -std=c++17 against `native/` of scm-sim). 4.7 s, mostly the hash.
+- Tests: `tests/cli-mod-header.test.ts` (made mod: tbl/unitnames names, a 230-unit `.dat`, stat.txt fill, a name list,
+  `--namespace`, `--bot`).
+
+## `bot run --mod`, `bot ladder --mod`: overlay 2 (C4, 2026-11-08, branch `mod-header`)
+
+- **Overlay version 2** (`engine.ts`: `MOD_OVERLAY` 2, `MOD_CODE` 2; `modArgs(engine, layers, need = 1)`): files-only
+  commands (`map test|trace|cost`, `mod test`) still ask for 1, so an engine of 1 keeps serving them; `bot run` and
+  `bot ladder` ask for 2 and an engine of 1 is refused with the sentence naming what 2 adds. scm-sim writes `"mods": 2`
+  (`scripts/lib/engine-current.mjs`, `src/exact/modRunner.ts`).
+- **What 2 carries** (`modOverlay(path, base, { code: true })`, `writeCode`): the temporary folder gains `plugins/`
+  (the plugins the mod carries as files; one inside its archive is not loaded by the page, so not written),
+  `firegraft/` (the `.fgp` and `.fgd`, from the patcher exe's archive for a release) and `mod.json`
+  `{ name, hash, withoutPlugins, link? }` from `sourceHash`. **The runner takes `mod.json`'s hash as the mod's**:
+  the loose folder cannot be hashed again to the same lines (a release's `plugins\apply` and `Firegraft\*.txt` are
+  archive members of its exe that `writeLoose` puts under `plugins/` and `Firegraft/`, which both the page's loose
+  rule and the runner's walk leave out). Given a release folder directly, the runner works the hash out itself by the
+  same rule and gets ac3f86533e4b5a31 (scm-sim `src/bwapi/modCode.ts`).
+- **The start line** gains `game` ("ums" | "melee"), `code` (`RunnerCodeReport`: name, hash, without plugins, each
+  plugin's init in the runner's words, those skipped, the FireGraft project and its edit count, hash ms) and `fit`
+  (`BotFitReport`; the ladder's start has `fits` by side). `codeWords` / `fitWords` word them (translated: the runner's
+  own `words` are English and not shown). The ladder prints them once, after the first game that has a start, and
+  `ladder.json` keeps `mod` per game.
+- `--ums` / `--melee` pass through; the runner's default is the map's own settings when the map looks made for them
+  (the page's `looksLikeMapSettings`) or the mod has plugins.
+- **Proof** (2026-11-08, local engine folder with `current.json` `mods: 2` and the bundled runners): `bot run
+  cosmonarchy-example.scmbot "(4)Exodus 1.0.scx" --mod <release> --race terran --seed 7`: "made for Cosmonarchy BW",
+  4 plugins, FireGraft 7 edits, defeat at frame 11,308, 12.26 + 0.52 ms a frame, 150.9 s.
+
+## `mod play --bot`, `mod_header`, `mod_play` (C6 of the capstone, 2026-11-08, branch `mod-surface`)
+
+scm-sim `docs/mods-plan.md` "C6, as built"; the page's side is scm-sim branch `mod-handoff-bot` (`web/handed.ts`
+`readBot`, `web/main.ts` `handedBotKey`/`seatedBotRow`, `web/setup.ts` `choose`, `web/smoke-mod-play.mjs`).
+- **`mod play <mod> --map <map> --bot <bot> [--race r] [--start]`** (`cli/src/mod/play.ts`): `playBotOf` — a path
+  (`.scmbot`, a separator, or an existing file) is read and handed as bytes, else a key (`[A-Za-z0-9][\w.-]{0,63}`,
+  the page checks it against its catalogue); `pageRace` (z/t/p/r and the names → 0/1/2/6); `--bot` needs `--map`,
+  `--race` needs `--bot`. `handoffExtra(set, o)` is what the manifest gains as `handoff` (absent without a bot, so
+  the old manifest shape stands): `setup: true` unless `--start`, `useMapSettings: true` for a mod with plugins or a
+  FireGraft project (the runners' rule) else `null` (the page's guess — **send null, not absent**: the page reads an
+  absent `useMapSettings` as true, the first editors' default), `bot: { key | file: <name>, race? }`. The loopback page
+  fetches `/<token>/bot` for a file and posts `bot: { file: File, name, race? }`. `PlayOutcome.bot` is the row the page
+  answers `shown`/`started` with; `scmjs.play.waiting` (the page's sign-in for a catalogue bot) prints as
+  `scmjs.waiting` does; `ready` is now forwarded and printed ("ready", then "ready again" after the page loads on the
+  kept mod).
+- **`?lift=live` (all `mod play`, not only `--bot`)**: a mod with plugins or a FireGraft project is handed to the page
+  at `?lift=live` unless the address has a `lift` already (`PlayOptions.lift` overrides). Before C6, `mod play` of
+  Cosmonarchy ran the game without its plugins (the page runs them only there) — a finding of this slice.
+- **`--start` without `--bot`** changes nothing: a handed map without `setup` always started at once (unchanged).
+- **MCP**: `mod_header` (path, out, namespace, bot, starcraft; `destructiveHint`) → `writeModHeader`, the data its
+  `HeaderResult`. `mod_play` (path, map, bot, race enum, start, wait 10–900 s, starcraft; `openWorldHint`) →
+  `playOnPage` with `onAddress` kept: the text is the outcome, `Hand-over page: <link>`, the page's message types; the
+  data `{ link, name, hash, withoutPlugins, files, started, shown, error, bot, said }`; a page error is `isError`; the
+  timeout's CliError gains the link. Its live lines go to stderr. `map_trace`/`map_cost` gained `mod` (the commands'
+  `--mod`: `modOverlay` handed to `runMapInGame`, removed after). 33 tools.
+- **Help**: `bot run` and `bot ladder` say `--mod` needs `"mods": 2`; `bot build` says it needs Docker.
+- **Tests**: `tests/cli-mod.test.ts` "scmjs mod play --bot" (5) runs **the loopback page's own script** in a `vm`
+  context (fetch, File, `open`, `addEventListener` stood in) and checks the message it posts after `ready` — key and
+  file, `setup`, `useMapSettings`, `?lift=live` kept beside the address's own query; `tests/cli-mcp.test.ts`
+  "mod_header and mod_play" (2) plus the tool list and `map_trace` `mod` on an engine without mods.
+- **Proof** (the real CLI against a dev server, scm-sim `web/smoke-mod-play.mjs`): see scm-sim's record.
+
+## Open
+
+- The hash is one rule everywhere since `mod-hash` ("The mod hash, one rule" above, with its known gaps). The copy
+  now holds every `arr\` table (the Mod Editor's `mapdata`/`portdata` mismatch); no longer matters for the hash.
+- The Mod Editor plugin's API asks (reader `under`/`member`, `rehash`, `storedPath`, the worked-out manifest, folder
+  picks and drops) are in `plugins-host.md` "The Mod Editor's asks".
+- The runners' `--mod <folder>` and `current.json` `"mods"` (now 2) are scm-sim's to publish with a deploy.
+- `map run` (plugins, no engine) has no `--mod`; `map test|trace|cost` and `mod test` do.
+- iscript header comments (images using an id) are not written; table comments are.
+- `docs/images/cli-overview.webp` predates the `mod` row (re-run `scripts/cli-screenshots.mjs`).
+- Writing a 1 GB MPQ holds every member and the output in memory (~2 GB for Cosmonarchy).

@@ -72,10 +72,76 @@ export interface LoadedNames {
 
 let loadedNames: LoadedNames | null = null;
 
-/** Put the names the data gives in front of the tables here (`null` goes back to the tables alone). */
-export function installNames(names: LoadedNames | null): void {
-  loadedNames = names;
+/**
+ * What the loaded data set has beyond StarEdit's palette: how many types its units.dat
+ * holds, and the ones the palette lists by the data's own race and building — those past
+ * the game's 228, and before them any of the game's types the data set renamed into
+ * something StarEdit's group for that id no longer describes (`gameNames.ts#unitCatalogue`).
+ * A data set made from the game's own files has none.
+ */
+export interface UnitCatalogue {
+  count: number;
+  extended: readonly { id: number; race: RaceKey; building: boolean }[];
 }
+
+let loadedCatalogue: UnitCatalogue | null = null;
+
+/** Put the names the data gives in front of the tables here (`null` goes back to the tables alone), with what the data has past the game's types. */
+export function installNames(names: LoadedNames | null, catalogue: UnitCatalogue | null = null): void {
+  loadedNames = names;
+  loadedCatalogue = catalogue;
+}
+
+/**
+ * How many unit types the loaded data set has: 228 for the game's own files (and when
+ * nothing is loaded), more for a data set whose units.dat is wider. Ids from 228 on have
+ * no per-map settings — the CHK format's settings sections hold 228 — but can be placed.
+ */
+export function unitTypeCount(): number {
+  return Math.max(UNIT_NAMES.length, loadedCatalogue?.count ?? 0);
+}
+
+/**
+ * StarEdit's groups less the types the data set groups itself (a mod's Zerg unit in the slot
+ * of a Terran building): `UNIT_GROUPS` as it is for the game's own data.
+ */
+export function starEditUnitGroups(): UnitGroup[] {
+  const moved = new Set((loadedCatalogue?.extended ?? []).filter((u) => u.id < UNIT_NAMES.length).map((u) => u.id));
+  if (moved.size === 0) return UNIT_GROUPS;
+  return UNIT_GROUPS.map((g) => ({ ...g, units: g.units.filter((id) => !moved.has(id)) })).filter((g) => g.units.length > 0);
+}
+
+/** The palette groups for the types the data set groups itself (past the game's 228, and any it moved), by race and building, in id order; empty for the game's own data. */
+export function dataSetUnitGroups(): UnitGroup[] {
+  const extended = loadedCatalogue?.extended ?? [];
+  const out: UnitGroup[] = [];
+  for (const race of ["terran", "zerg", "protoss", "neutral"] as const) {
+    for (const building of [false, true]) {
+      const units = extended.filter((u) => u.race === race && u.building === building).map((u) => u.id);
+      if (units.length > 0) out.push({ race, label: DATA_SET_GROUP_LABELS[race][building ? 1 : 0], units });
+    }
+  }
+  return out;
+}
+
+/**
+ * Every group a unit list shows, as shown: StarEdit's, then the data set's own with its
+ * name in front (`dataSet`, the data set's name). Built per call: the names and the data
+ * set's types follow what is loaded.
+ */
+export function shownUnitGroups(dataSet: string): { key: string; label: string; race: RaceKey; units: number[] }[] {
+  return [
+    ...starEditUnitGroups().map((g) => ({ key: g.label, label: translate(g.label), race: g.race, units: g.units })),
+    ...dataSetUnitGroups().map((g) => ({ key: `dataset:${g.label}`, label: `${dataSet} · ${translate(g.label)}`, race: g.race, units: g.units })),
+  ];
+}
+
+const DATA_SET_GROUP_LABELS: Record<RaceKey, readonly [string, string]> = {
+  terran: [msg("Terran Units"), msg("Terran Buildings")],
+  zerg: [msg("Zerg Units"), msg("Zerg Buildings")],
+  protoss: [msg("Protoss Units"), msg("Protoss Buildings")],
+  neutral: [msg("Neutral Units"), msg("Neutral Buildings")],
+};
 
 /** The names currently in front of the tables, or null when the data's are the game's own or nothing is loaded. */
 export function currentLoadedNames(): LoadedNames | null {
@@ -172,6 +238,9 @@ export const TECH_NAMES: readonly string[] = [
   msg("Unused (35)"), msg("Unused (36)"), msg("Unused (37)"), msg("Unused (38)"), msg("Unused (39)"), msg("Unused (40)"), msg("Unused (41)"), msg("Unused (42)"), msg("Unused (43)"),
 ];
 
+/** How many upgrades / technologies the loaded data set names: the game's 61 / 44, more for a mod whose tables are wider (the map's settings hold the game's). */
+export const upgradeTypeCount = () => Math.max(UPGRADE_NAMES.length, loadedNames?.upgrades.length ?? 0);
+export const techTypeCount = () => Math.max(TECH_NAMES.length, loadedNames?.techs.length ?? 0);
 export const upgradeName = (id: number) => loadedNames?.upgrades[id] ?? UPGRADE_NAMES[id] ?? `Upgrade #${id}`;
 export const techName = (id: number) => loadedNames?.techs[id] ?? TECH_NAMES[id] ?? `Technology #${id}`;
 
